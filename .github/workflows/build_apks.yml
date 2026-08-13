@@ -35,10 +35,14 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
           
+      # Bumped from 3.35.7 (Dart 3.9.2): google_fonts ^8.2.1 requires Dart
+      # ^3.10.0, so pub's version solver had no compatible resolution left
+      # under the old pin - confirmed fixed by building both apps locally
+      # against this exact version.
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.35.7'
+          flutter-version: '3.41.7'
 
       # Release builds refuse to run without android/key.properties (see build.gradle:
       # "Release signing requires android/key.properties"). Decode the keystore and

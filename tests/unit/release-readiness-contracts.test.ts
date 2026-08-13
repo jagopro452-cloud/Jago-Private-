@@ -24,9 +24,9 @@ describe("production client telemetry", () => {
     ]) {
       expect(routesSource).toContain(`recordClientVersionTelemetry(req, "${endpoint}")`);
     }
-    expect(customerAuthSource).toContain("'X-Client-Version': '1.0.62+62'");
+    expect(customerAuthSource).toContain("'X-Client-Version': '1.0.63+63'");
     expect(customerAuthSource).toContain("'X-Client-Platform': 'android'");
-    expect(driverAuthSource).toContain("'X-Client-Version': '1.0.63+63'");
+    expect(driverAuthSource).toContain("'X-Client-Version': '1.0.64+64'");
     expect(driverAuthSource).toContain("'X-Client-Platform': 'android'");
   });
 });
