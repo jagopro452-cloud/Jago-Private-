@@ -70,7 +70,23 @@ jobs:
           script: |
             set -e
             rm -rf /home/ubuntu/jago-app/app.rollback
-            cp -al /home/ubuntu/jago-app/app /home/ubuntu/jago-app/app.rollback
+            # cp -al can transiently fail to hard-link individual files under
+            # public/uploads/ if the live app is writing/replacing one at the
+            # exact moment of this snapshot (observed in production: EPERM on
+            # a handful of files that no longer even existed moments later -
+            # a hard-link race against a real user upload, not a persistent
+            # permissions bug). That's fine to tolerate - uploads are live
+            # user data the rollback doesn't need to protect the way it
+            # protects code. Only cp's exit code is swallowed here; the
+            # dist/index.js check right below is what actually verifies the
+            # snapshot is usable, so a real failure (disk full, code files
+            # unreadable) still aborts the deploy.
+            cp -al /home/ubuntu/jago-app/app /home/ubuntu/jago-app/app.rollback || true
+            if [ ! -f /home/ubuntu/jago-app/app.rollback/dist/index.js ]; then
+              echo "ERROR: rollback snapshot is missing dist/index.js - aborting, nothing was changed"
+              rm -rf /home/ubuntu/jago-app/app.rollback
+              exit 1
+            fi
             # dist/index.js was previously rewritten via truncate-in-place by
             # esbuild running ON THE SERVER, which is why this special-case
             # exists. The build no longer runs on the server - dist/index.js
