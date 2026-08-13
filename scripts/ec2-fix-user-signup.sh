@@ -1,0 +1,25 @@
+#!/bin/bash
+set -euo pipefail
+cd /home/ubuntu/jago-app
+export PGPASSWORD="${PGPASSWORD:-jagopass2026}"
+
+echo "=== Apply user signup schema fix ==="
+psql -h localhost -U jago -d jago -v ON_ERROR_STOP=0 -f server/migrations/005_user_auth_schema_fix.sql || true
+
+echo "=== Mark migration applied ==="
+psql -h localhost -U jago -d jago -v ON_ERROR_STOP=0 -c \
+  "INSERT INTO migrations (name, applied_at) VALUES ('005_user_auth_schema_fix.sql', NOW()) ON CONFLICT (name) DO NOTHING;" || true
+
+echo "=== Restart API ==="
+pm2 restart jago-server
+sleep 20
+
+echo "=== Verify health ==="
+curl -sS http://127.0.0.1:5000/api/health || true
+echo
+
+echo "=== Verify register endpoint ==="
+curl -sS -X POST http://127.0.0.1:5000/api/app/register \
+  -H 'Content-Type: application/json' \
+  -d '{"phone":"9999900099","password":"TestPass1","fullName":"Signup Test","userType":"customer"}' | head -c 400
+echo

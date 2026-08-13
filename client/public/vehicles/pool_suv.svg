@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 130 90" fill="none">
+  <rect x="3" y="36" width="122" height="26" rx="8" fill="#fee2e2" stroke="#dc2626" stroke-width="3"/>
+  <path d="M12 36 L20 12 L110 12 L118 36" stroke="#dc2626" stroke-width="3" fill="#fecaca"/>
+  <rect x="24" y="15" width="22" height="19" rx="3" fill="#bae6fd" stroke="#dc2626" stroke-width="1.5"/>
+  <rect x="84" y="15" width="22" height="19" rx="3" fill="#bae6fd" stroke="#dc2626" stroke-width="1.5"/>
+  <circle cx="28" cy="64" r="13" stroke="#dc2626" stroke-width="4" fill="none"/>
+  <circle cx="28" cy="64" r="4" fill="#dc2626"/>
+  <circle cx="102" cy="64" r="13" stroke="#dc2626" stroke-width="4" fill="none"/>
+  <circle cx="102" cy="64" r="4" fill="#dc2626"/>
+  <!-- People: 6 passengers in 2 rows -->
+  <circle cx="35" cy="21" r="4" fill="#dc2626"/>
+  <circle cx="52" cy="21" r="4" fill="#dc2626"/>
+  <circle cx="65" cy="21" r="4" fill="#dc2626"/>
+  <circle cx="78" cy="21" r="4" fill="#dc2626"/>
+  <circle cx="95" cy="21" r="4" fill="#ef4444"/>
+  <circle cx="108" cy="21" r="4" fill="#ef4444"/>
+  <!-- Share badge -->
+  <circle cx="118" cy="12" r="12" fill="#dc2626"/>
+  <text x="118" y="16" text-anchor="middle" font-size="10" fill="white" font-family="Arial" font-weight="bold">6</text>
+  <text x="65" y="82" text-anchor="middle" font-size="7" fill="#dc2626" font-family="Arial" font-weight="bold">SUV POOL • 6 SEATS</text>
+</svg>

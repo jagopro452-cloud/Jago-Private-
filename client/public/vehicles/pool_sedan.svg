@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 130 90" fill="none">
+  <rect x="4" y="38" width="118" height="24" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="3"/>
+  <path d="M15 38 L25 16 L105 16 L115 38" stroke="#7c3aed" stroke-width="3" fill="#ddd6fe"/>
+  <rect x="28" y="19" width="22" height="17" rx="3" fill="#bae6fd" stroke="#7c3aed" stroke-width="1.5"/>
+  <rect x="80" y="19" width="22" height="17" rx="3" fill="#bae6fd" stroke="#7c3aed" stroke-width="1.5"/>
+  <circle cx="28" cy="64" r="12" stroke="#7c3aed" stroke-width="4" fill="none"/>
+  <circle cx="28" cy="64" r="4" fill="#7c3aed"/>
+  <circle cx="102" cy="64" r="12" stroke="#7c3aed" stroke-width="4" fill="none"/>
+  <circle cx="102" cy="64" r="4" fill="#7c3aed"/>
+  <!-- People: 4 passengers -->
+  <circle cx="39" cy="26" r="4" fill="#7c3aed"/>
+  <circle cx="58" cy="26" r="4" fill="#7c3aed"/>
+  <circle cx="72" cy="26" r="4" fill="#7c3aed"/>
+  <circle cx="91" cy="26" r="4" fill="#a78bfa"/>
+  <!-- Share badge -->
+  <circle cx="118" cy="14" r="12" fill="#7c3aed"/>
+  <text x="118" y="18" text-anchor="middle" font-size="10" fill="white" font-family="Arial" font-weight="bold">4</text>
+  <text x="65" y="82" text-anchor="middle" font-size="7" fill="#7c3aed" font-family="Arial" font-weight="bold">SEDAN POOL • 4 SEATS</text>
+</svg>

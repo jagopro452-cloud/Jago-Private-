@@ -1,0 +1,112 @@
+plugins {
+    id "com.android.application"
+    id "kotlin-android"
+    id "dev.flutter.flutter-gradle-plugin"
+    id "com.google.gms.google-services"
+}
+
+import groovy.json.JsonSlurper
+
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file('key.properties')
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
+def localProperties = new Properties()
+def localPropertiesFile = rootProject.file('local.properties')
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.withReader('UTF-8') { reader -> localProperties.load(reader) }
+}
+
+def readFirebaseApiKey = {
+    def googleServicesFile = project.file('google-services.json')
+    if (!googleServicesFile.exists()) return ''
+    try {
+        def json = new JsonSlurper().parse(googleServicesFile)
+        return json?.client?.getAt(0)?.api_key?.getAt(0)?.current_key ?: ''
+    } catch (ignored) {
+        return ''
+    }
+}
+
+def googleMapsKey = (localProperties.getProperty('GOOGLE_MAPS_KEY')
+    ?: localProperties.getProperty('GOOGLE_MAPS_API_KEY')
+    ?: System.getenv('GOOGLE_MAPS_KEY')
+    ?: System.getenv('GOOGLE_MAPS_API_KEY')
+    ?: readFirebaseApiKey()
+    ?: '')
+
+if (!googleMapsKey?.trim()) {
+    throw new GradleException("GOOGLE_MAPS_KEY / GOOGLE_MAPS_API_KEY is required for Android Maps SDK. Refusing to build a grey-map APK.")
+}
+
+def flutterVersionCode = (localProperties.getProperty('flutter.versionCode') ?: '74').toInteger()
+def flutterVersionName = (localProperties.getProperty('flutter.versionName') ?: '1.0.74')
+
+android {
+    namespace "com.mindwhile.jago_customer"
+    compileSdk 36
+    ndkVersion "27.0.12077973"
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+        coreLibraryDesugaringEnabled true
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+
+    sourceSets {
+        main.java.srcDirs += "src/main/kotlin"
+    }
+
+    signingConfigs {
+        release {
+            keyAlias keystoreProperties['keyAlias'] ?: 'jago'
+            keyPassword keystoreProperties['keyPassword'] ?: ''
+            storeFile keystoreProperties['storeFile'] ? file(keystoreProperties['storeFile']) : null
+            storePassword keystoreProperties['storePassword'] ?: ''
+        }
+    }
+
+    defaultConfig {
+        applicationId "com.mindwhile.jago_customer"
+        minSdkVersion 24
+        targetSdkVersion 35
+        versionCode flutterVersionCode
+        versionName flutterVersionName
+        multiDexEnabled true
+        manifestPlaceholders = [googleMapsApiKey: googleMapsKey]
+    }
+
+    buildTypes {
+        release {
+            if (!keystorePropertiesFile.exists()) {
+                throw new GradleException("Release signing requires android/key.properties. Refusing to build a debug-signed release APK/AAB.")
+            }
+            signingConfig signingConfigs.release
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        debug {
+        }
+    }
+}
+
+flutter {
+    source "../.."
+}
+
+dependencies {
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'
+    implementation 'androidx.multidex:multidex:2.0.1'
+}

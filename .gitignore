@@ -1,0 +1,102 @@
+node_modules
+dist
+.DS_Store
+server/public
+vite.config.ts.*
+*.tar.gz
+
+# Android release signing — NEVER commit these
+key.properties
+*.jks
+*.keystore
+**/android/app/google-services.json
+
+# iOS signing/API-key secrets — NEVER commit these
+**/ios/Flutter/Secrets.xcconfig
+**/ios/Runner/GoogleService-Info.plist
+
+# Flutter & Android build SDKs (large, not needed in repo)
+.flutter-sdk/
+.android-sdk/
+.pub-cache/
+.gradle-cache/
+.gradle/
+**/android/.gradle/
+**/local.properties
+.build-tmp/
+
+# Build outputs
+*.apk
+!public/apks/
+!public/apks/jago-customer-latest.apk
+!public/apks/jago-driver-latest.apk
+!public/apks/jago-customer-v1.0.62-release.apk
+!public/apks/jago-customer-v1.0.74-release.apk
+!public/apks/jago-customer-v1.0.93-release.apk
+!public/apks/jago-customer-v1.0.96-release.apk
+!public/apks/jago-pilot-v1.0.75-release.apk
+!public/apks/jago-driver-v1.0.63-release.apk
+!public/apks/jago-driver-v1.0.94-release.apk
+!public/apks/jago-pilot-v1.0.94-release.apk
+!public/apks/jago-driver-v1.0.95-release.apk
+!public/apks/jago-pilot-v1.0.95-release.apk
+!public/apks/jago-driver-v1.0.96-release.apk
+!public/apks/jago-pilot-v1.0.96-release.apk
+!public/apks/jago-driver-v1.0.97-release.apk
+!public/apks/jago-pilot-v1.0.97-release.apk
+flutter_apps/customer_app/build/
+flutter_apps/driver_app/build/
+flutter_apps/shared_core/build/
+flutter_apps/customer_app/.dart_tool/
+flutter_apps/driver_app/.dart_tool/
+flutter_apps/shared_core/.dart_tool/
+flutter_apps/customer_app/.flutter-plugins
+flutter_apps/customer_app/.flutter-plugins-dependencies
+flutter_apps/driver_app/.flutter-plugins
+flutter_apps/driver_app/.flutter-plugins-dependencies
+flutter_apps/shared_core/.flutter-plugins-dependencies
+flutter_apps/customer_app/android/.kotlin/
+flutter_apps/customer_app/android/hs_err_pid*.log
+flutter_apps/customer_app/android/replay_pid*.log
+flutter_apps/driver_app/android/.kotlin/
+flutter_apps/driver_app/android/hs_err_pid*.log
+flutter_apps/driver_app/android/replay_pid*.log
+
+# Logs
+build_output.log
+
+# Environment
+.env
+
+# DigitalOcean spec exports (contain secrets)
+do-spec.yaml
+
+# Claude worktrees
+.claude/
+
+# Public APK downloads (served at runtime, not version controlled)
+public/apks/*
+!public/apks/jago-customer-latest.apk
+!public/apks/jago-driver-latest.apk
+!public/apks/jago-customer-v1.0.62-release.apk
+!public/apks/jago-customer-v1.0.74-release.apk
+!public/apks/jago-customer-v1.0.93-release.apk
+!public/apks/jago-customer-v1.0.96-release.apk
+!public/apks/jago-pilot-v1.0.75-release.apk
+!public/apks/jago-driver-v1.0.63-release.apk
+!public/apks/jago-driver-v1.0.94-release.apk
+!public/apks/jago-pilot-v1.0.94-release.apk
+!public/apks/jago-driver-v1.0.95-release.apk
+!public/apks/jago-pilot-v1.0.95-release.apk
+!public/apks/jago-driver-v1.0.96-release.apk
+!public/apks/jago-pilot-v1.0.96-release.apk
+!public/apks/jago-driver-v1.0.97-release.apk
+!public/apks/jago-pilot-v1.0.97-release.apk
+.env.*
+
+# Sensitive artifacts and prompt dumps
+attached_assets/
+
+# Local development PostgreSQL cluster (generated at runtime)
+.local-postgres/
+*.hprof

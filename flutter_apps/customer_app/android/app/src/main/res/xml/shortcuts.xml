@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="voice_booking"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_voice_booking_short"
+        android:shortcutLongLabel="@string/shortcut_voice_booking_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.mindwhile.jago_customer"
+            android:targetClass="com.mindwhile.jago_customer.MainActivity"
+            android:data="jago://voice/booking" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+</shortcuts>

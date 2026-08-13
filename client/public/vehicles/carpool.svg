@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80" fill="none">
+  <rect x="3" y="33" width="114" height="28" rx="8" fill="#ecfeff" stroke="#0e7490" stroke-width="3"/>
+  <path d="M12 33 L22 12 L98 12 L108 33" stroke="#0e7490" stroke-width="3" fill="#cffafe"/>
+  <rect x="25" y="15" width="20" height="16" rx="3" fill="#bae6fd" stroke="#0e7490" stroke-width="1.5"/>
+  <rect x="50" y="15" width="20" height="16" rx="3" fill="#bae6fd" stroke="#0e7490" stroke-width="1.5"/>
+  <rect x="75" y="15" width="20" height="16" rx="3" fill="#bae6fd" stroke="#0e7490" stroke-width="1.5"/>
+  <circle cx="28" cy="63" r="12" stroke="#0e7490" stroke-width="4" fill="none"/>
+  <circle cx="28" cy="63" r="4" fill="#0e7490"/>
+  <circle cx="92" cy="63" r="12" stroke="#0e7490" stroke-width="4" fill="none"/>
+  <circle cx="92" cy="63" r="4" fill="#0e7490"/>
+  <circle cx="38" cy="26" r="4" fill="#0e7490"/>
+  <circle cx="60" cy="26" r="4" fill="#0e7490"/>
+  <circle cx="82" cy="26" r="4" fill="#0e7490"/>
+  <text x="60" y="9" text-anchor="middle" font-size="7" fill="#0e7490" font-family="Arial" font-weight="bold">CARPOOL</text>
+</svg>

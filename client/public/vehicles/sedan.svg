@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80" fill="none">
+  <rect x="4" y="40" width="112" height="22" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="3"/>
+  <path d="M15 40 L25 16 L95 16 L105 40" stroke="#7c3aed" stroke-width="3" fill="#ddd6fe"/>
+  <rect x="28" y="19" width="24" height="18" rx="3" fill="#bae6fd" stroke="#7c3aed" stroke-width="1.5"/>
+  <rect x="67" y="19" width="24" height="18" rx="3" fill="#bae6fd" stroke="#7c3aed" stroke-width="1.5"/>
+  <circle cx="28" cy="64" r="12" stroke="#7c3aed" stroke-width="4" fill="none"/>
+  <circle cx="28" cy="64" r="4" fill="#7c3aed"/>
+  <circle cx="92" cy="64" r="12" stroke="#7c3aed" stroke-width="4" fill="none"/>
+  <circle cx="92" cy="64" r="4" fill="#7c3aed"/>
+  <rect x="4" y="47" width="9" height="7" rx="2" fill="#fbbf24"/>
+  <rect x="107" y="47" width="9" height="7" rx="2" fill="#ef4444"/>
+  <path d="M52 19 L55 16 L65 16 L68 19" stroke="#7c3aed" stroke-width="1.5" fill="none"/>
+  <text x="60" y="9" text-anchor="middle" font-size="7" fill="#7c3aed" font-family="Arial" font-weight="bold">SEDAN</text>
+</svg>

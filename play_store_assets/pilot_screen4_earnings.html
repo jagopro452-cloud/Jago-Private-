@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { width:1080px; height:1920px; background:#060e22; font-family:'Segoe UI',Arial,sans-serif; overflow:hidden; position:relative; }
+  .status-bar { height:60px; background:#060e22; display:flex; align-items:center; justify-content:space-between; padding:0 40px; }
+  .status-time { color:#fff; font-size:28px; font-weight:600; }
+  .status-icons { color:#fff; font-size:22px; }
+
+  .header { padding:28px 40px; }
+  .header-title { font-size:42px; font-weight:800; color:#fff; }
+  .header-sub { font-size:24px; color:#8899bb; margin-top:4px; }
+
+  /* balance hero */
+  .balance-hero { margin:0 40px 28px; background:linear-gradient(135deg,#0f2855,#1a3a7a); border-radius:28px; padding:44px; border:1px solid #243060; position:relative; overflow:hidden; }
+  .bh-decoration { position:absolute; right:-40px; top:-40px; width:240px; height:240px; border-radius:50%; background:rgba(59,130,246,0.1); border:2px solid rgba(59,130,246,0.2); }
+  .bh-decoration2 { position:absolute; right:-80px; top:-80px; width:320px; height:320px; border-radius:50%; border:2px solid rgba(59,130,246,0.1); }
+  .bh-label { font-size:26px; color:#93c5fd; margin-bottom:12px; }
+  .bh-amount { font-size:96px; color:#fff; font-weight:900; line-height:1; }
+  .bh-sub { font-size:24px; color:#10b981; margin-top:12px; }
+  .bh-actions { display:flex; gap:20px; margin-top:32px; }
+  .bh-btn { flex:1; border-radius:16px; padding:24px; text-align:center; font-size:26px; font-weight:700; border:none; cursor:pointer; }
+  .btn-withdraw { background:#10b981; color:#fff; }
+  .btn-history { background:#162040; color:#fff; border:1px solid #243060; }
+
+  /* period tabs */
+  .period-tabs { display:flex; gap:0; margin:0 40px 28px; background:#0f1b3d; border-radius:16px; padding:8px; }
+  .tab { flex:1; border-radius:12px; padding:18px; text-align:center; font-size:24px; color:#8899bb; font-weight:600; cursor:pointer; }
+  .tab.active { background:#3B82F6; color:#fff; }
+
+  /* chart placeholder */
+  .chart-area { margin:0 40px 28px; background:#0f1b3d; border-radius:24px; padding:32px; border:1px solid #162040; }
+  .chart-title { font-size:26px; color:#8899bb; margin-bottom:24px; }
+  .chart-bars { display:flex; align-items:flex-end; gap:12px; height:180px; }
+  .bar-group { display:flex; flex-direction:column; align-items:center; flex:1; gap:8px; }
+  .bar { border-radius:8px 8px 0 0; width:100%; background:linear-gradient(180deg,#3B82F6,#1d4ed8); transition:all 0.3s; }
+  .bar-label { font-size:18px; color:#8899bb; }
+  .chart-total { display:flex; align-items:center; justify-content:space-between; margin-top:20px; padding-top:20px; border-top:1px solid #162040; }
+  .chart-total-label { font-size:24px; color:#8899bb; }
+  .chart-total-val { font-size:36px; color:#fff; font-weight:800; }
+
+  /* stats grid */
+  .stats-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:20px; margin:0 40px 28px; }
+  .stat-card { background:#0f1b3d; border-radius:20px; padding:32px; border:1px solid #162040; }
+  .stat-icon { font-size:40px; margin-bottom:12px; }
+  .stat-val { font-size:44px; color:#fff; font-weight:900; }
+  .stat-label { font-size:20px; color:#8899bb; margin-top:8px; }
+  .stat-change { font-size:20px; margin-top:8px; font-weight:600; }
+  .up { color:#10b981; }
+  .down { color:#ef4444; }
+
+  /* recent */
+  .section-label { font-size:28px; color:#8899bb; margin:0 40px 16px; font-weight:600; }
+  .earn-item { margin:0 40px 16px; background:#0f1b3d; border-radius:20px; padding:24px 28px; display:flex; align-items:center; gap:20px; border:1px solid #162040; }
+  .earn-item-icon { width:64px; height:64px; border-radius:16px; background:#162040; display:flex; align-items:center; justify-content:center; font-size:32px; flex-shrink:0; }
+  .earn-item-info { flex:1; }
+  .earn-item-name { font-size:26px; color:#fff; font-weight:600; }
+  .earn-item-time { font-size:20px; color:#8899bb; margin-top:4px; }
+  .earn-item-amount { font-size:32px; color:#10b981; font-weight:800; }
+
+  .bottom-nav { position:absolute; bottom:0; left:0; right:0; background:#060e22; height:120px; display:flex; align-items:center; justify-content:space-around; border-top:1px solid #0f1b3d; }
+  .nav-item { display:flex; flex-direction:column; align-items:center; gap:8px; }
+  .nav-icon { font-size:38px; }
+  .nav-label { font-size:18px; color:#8899bb; }
+</style>
+</head>
+<body>
+  <div class="status-bar">
+    <span class="status-time">11:00</span>
+    <div class="status-icons">●●●● 🔋</div>
+  </div>
+
+  <div class="header">
+    <div class="header-title">💰 My Earnings</div>
+    <div class="header-sub">Track your income & performance</div>
+  </div>
+
+  <div class="balance-hero">
+    <div class="bh-decoration"></div>
+    <div class="bh-decoration2"></div>
+    <div class="bh-label">Total Balance</div>
+    <div class="bh-amount">₹ 3,240</div>
+    <div class="bh-sub">↑ ₹640 earned today · 12 rides</div>
+    <div class="bh-actions">
+      <button class="bh-btn btn-withdraw">🏦 Withdraw</button>
+      <button class="bh-btn btn-history">📋 Statement</button>
+    </div>
+  </div>
+
+  <div class="period-tabs">
+    <div class="tab">Today</div>
+    <div class="tab active">This Week</div>
+    <div class="tab">Month</div>
+  </div>
+
+  <div class="chart-area">
+    <div class="chart-title">Daily Earnings — This Week</div>
+    <div class="chart-bars">
+      <div class="bar-group">
+        <div class="bar" style="height:90px;background:linear-gradient(180deg,#3B82F6,#1d4ed8);"></div>
+        <div class="bar-label">Mon</div>
+      </div>
+      <div class="bar-group">
+        <div class="bar" style="height:120px;"></div>
+        <div class="bar-label">Tue</div>
+      </div>
+      <div class="bar-group">
+        <div class="bar" style="height:70px;background:linear-gradient(180deg,#60a5fa,#2563eb);"></div>
+        <div class="bar-label">Wed</div>
+      </div>
+      <div class="bar-group">
+        <div class="bar" style="height:150px;"></div>
+        <div class="bar-label">Thu</div>
+      </div>
+      <div class="bar-group">
+        <div class="bar" style="height:110px;background:linear-gradient(180deg,#60a5fa,#2563eb);"></div>
+        <div class="bar-label">Fri</div>
+      </div>
+      <div class="bar-group">
+        <div class="bar" style="height:170px;background:linear-gradient(180deg,#10b981,#059669);"></div>
+        <div class="bar-label">Sat</div>
+      </div>
+      <div class="bar-group">
+        <div class="bar" style="height:100px;background:linear-gradient(180deg,#10b981,#059669);opacity:0.5;"></div>
+        <div class="bar-label">Sun</div>
+      </div>
+    </div>
+    <div class="chart-total">
+      <span class="chart-total-label">Weekly Total</span>
+      <span class="chart-total-val">₹ 4,180</span>
+    </div>
+  </div>
+
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-icon">🛺</div>
+      <div class="stat-val">68</div>
+      <div class="stat-label">Rides this week</div>
+      <div class="stat-change up">↑ +12 vs last week</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon">⭐</div>
+      <div class="stat-val">4.9</div>
+      <div class="stat-label">Average rating</div>
+      <div class="stat-change up">↑ Excellent!</div>
+    </div>
+  </div>
+
+  <div class="section-label">Recent Earnings</div>
+
+  <div class="earn-item">
+    <div class="earn-item-icon">🛺</div>
+    <div class="earn-item-info">
+      <div class="earn-item-name">Auto Ride · 2.8 km</div>
+      <div class="earn-item-time">Today, 9:57 AM</div>
+    </div>
+    <div class="earn-item-amount">+₹58</div>
+  </div>
+  <div class="earn-item">
+    <div class="earn-item-icon">📦</div>
+    <div class="earn-item-info">
+      <div class="earn-item-name">Parcel Delivery · 4.2 km</div>
+      <div class="earn-item-time">Today, 8:30 AM</div>
+    </div>
+    <div class="earn-item-amount">+₹80</div>
+  </div>
+
+  <div class="bottom-nav">
+    <div class="nav-item"><span class="nav-icon">🏠</span><span class="nav-label">Home</span></div>
+    <div class="nav-item"><span class="nav-icon">🕐</span><span class="nav-label">Trips</span></div>
+    <div class="nav-item"><span class="nav-icon" style="filter:drop-shadow(0 0 8px #3B82F6);">💰</span><span class="nav-label" style="color:#3B82F6;">Earnings</span></div>
+    <div class="nav-item"><span class="nav-icon">👤</span><span class="nav-label">Profile</span></div>
+  </div>
+</body>
+</html>

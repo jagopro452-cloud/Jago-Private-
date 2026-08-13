@@ -1,0 +1,71 @@
+{
+  "_comment": "Tune thresholds without a code deploy. Hot-reload: POST /api/admin/alert-engine/config/reload",
+  "engine": {
+    "maxSurgeCap": 2.5,
+    "bookingPauseMaxMinutes": 10,
+    "alertCooldownMinutes": 15,
+    "minDwellMinutes": 2,
+    "checkIntervalSeconds": 60,
+    "recoveryCompletionRateMinPct": 80
+  },
+  "rules": {
+    "redis_down": {
+      "enabled": true,
+      "minConsecutiveBreaches": 2,
+      "minConsecutiveClears": 2
+    },
+    "payment_failures_high": {
+      "enabled": true,
+      "triggerThreshold": 5,
+      "clearThreshold": 1,
+      "minConsecutiveBreaches": 2,
+      "minConsecutiveClears": 2
+    },
+    "searching_rides_high": {
+      "enabled": true,
+      "triggerThreshold": 8,
+      "clearThreshold": 3,
+      "minConsecutiveBreaches": 2,
+      "minConsecutiveClears": 2
+    },
+    "no_online_drivers": {
+      "enabled": true,
+      "clearDrivers": 2,
+      "minConsecutiveBreaches": 1,
+      "minConsecutiveClears": 2
+    },
+    "low_accept_rate": {
+      "enabled": true,
+      "triggerPct": 40,
+      "clearPct": 60,
+      "minSamples": 5,
+      "minConsecutiveBreaches": 3,
+      "minConsecutiveClears": 3
+    },
+    "api_error_rate_high": {
+      "enabled": true,
+      "triggerPct": 3,
+      "clearPct": 1,
+      "minConsecutiveBreaches": 2,
+      "minConsecutiveClears": 2
+    },
+    "pending_payments_high": {
+      "enabled": true,
+      "triggerThreshold": 5,
+      "clearThreshold": 2,
+      "minConsecutiveBreaches": 2,
+      "minConsecutiveClears": 2
+    },
+    "otp_fail_high": {
+      "enabled": true,
+      "triggerThreshold": 15,
+      "clearThreshold": 6,
+      "minConsecutiveBreaches": 2,
+      "minConsecutiveClears": 2
+    }
+  },
+  "dispatch": {
+    "driverFatigueBackoffSeconds": 25,
+    "driverMaxConcurrentOffers": 1
+  }
+}

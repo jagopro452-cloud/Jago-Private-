@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80" fill="none">
+  <rect x="10" y="30" width="80" height="30" rx="6" fill="#fef3c7" stroke="#d97706" stroke-width="3"/>
+  <path d="M10 42 L25 20 L75 20 L90 42" stroke="#d97706" stroke-width="3" fill="#fde68a"/>
+  <rect x="28" y="24" width="20" height="16" rx="3" fill="#bae6fd" stroke="#d97706" stroke-width="1.5"/>
+  <rect x="55" y="24" width="20" height="16" rx="3" fill="#bae6fd" stroke="#d97706" stroke-width="1.5"/>
+  <circle cx="30" cy="62" r="12" stroke="#d97706" stroke-width="4" fill="none"/>
+  <circle cx="30" cy="62" r="4" fill="#d97706"/>
+  <circle cx="80" cy="62" r="12" stroke="#d97706" stroke-width="4" fill="none"/>
+  <circle cx="80" cy="62" r="4" fill="#d97706"/>
+  <path d="M90 38 L108 38 L108 52 L90 52" stroke="#d97706" stroke-width="2.5" fill="#fef3c7"/>
+  <text x="55" y="10" text-anchor="middle" font-size="8" fill="#d97706" font-family="Arial" font-weight="bold">AUTO</text>
+</svg>

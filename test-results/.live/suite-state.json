@@ -1,0 +1,236 @@
+{
+  "version": 1,
+  "envName": "live",
+  "qaRunId": "JAGO-QA-LIVE-1785474937483",
+  "createdAt": "2026-07-31T05:15:38.211Z",
+  "bootstrapMode": "seed",
+  "admin": {
+    "session": {
+      "admin": {
+        "id": "fc1e8e2e-d3f5-4ebe-b4bf-68f53fd2770c",
+        "name": "JAGO QA Admin",
+        "email": "qa-admin@jago.test",
+        "role": "superadmin"
+      },
+      "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmYzFlOGUyZS1kM2Y1LTRlYmUtYjRiZi02OGY1M2ZkMjc3MGMiLCJyb2xlIjoic3VwZXJhZG1pbiIsImRldmljZUlkIjoicWEtc2VlZC1hZG1pbi05OWFmM2NjOC03N2RiLTRiYjgtYTc2Ni03MTUzMDU1YTU1NTciLCJ0eXAiOiJhZG1pbl9hY2Nlc3MiLCJpYXQiOjE3ODU0NzQ5MzgsImV4cCI6MTc4NTUxODEzOCwianRpIjoiNzJmM2ViMzItODQ1OS00NTgxLTkxYzgtMGEzMGY1ODJlOWJkIn0.HthSvP6sGjfhVoiHL7SRSInCl9JTKVwcyeCuCWVfP7E",
+      "refreshToken": "fc1e8e2e-d3f5-4ebe-b4bf-68f53fd2770c:055d87270585b0ebea6fc8ddfc66cefe03a30c88957e5adb5bfe0105e8e9c3d90c418634a358495b3008492e9adafbdf",
+      "expiresAt": "2026-07-31T17:15:38.000Z"
+    }
+  },
+  "categories": {
+    "bike": {
+      "id": "87b10189-9d3f-4de6-a0be-1a38b3bf5f57",
+      "name": "Bike",
+      "icon": null,
+      "type": "ride",
+      "vehicleType": null,
+      "serviceType": "ride",
+      "baseFare": "20.00",
+      "farePerKm": "10.00",
+      "minimumFare": "0.00",
+      "waitingChargePerMin": "0.00",
+      "totalSeats": 4,
+      "isCarpool": false,
+      "isActive": true,
+      "createdAt": "2026-07-31 10:45:26.283873",
+      "description": null
+    },
+    "auto": {
+      "id": "c76f2066-3fb1-4ea7-900a-132c4aae0771",
+      "name": "Auto",
+      "icon": null,
+      "type": "ride",
+      "vehicleType": null,
+      "serviceType": "ride",
+      "baseFare": "20.00",
+      "farePerKm": "10.00",
+      "minimumFare": "0.00",
+      "waitingChargePerMin": "0.00",
+      "totalSeats": 4,
+      "isCarpool": false,
+      "isActive": true,
+      "createdAt": "2026-07-31 10:45:26.534536",
+      "description": null
+    },
+    "cab": {
+      "id": "e3f99ef8-54c1-4098-8538-34add8ee7111",
+      "name": "Cab",
+      "icon": null,
+      "type": "ride",
+      "vehicleType": null,
+      "serviceType": "ride",
+      "baseFare": "20.00",
+      "farePerKm": "10.00",
+      "minimumFare": "0.00",
+      "waitingChargePerMin": "0.00",
+      "totalSeats": 4,
+      "isCarpool": false,
+      "isActive": true,
+      "createdAt": "2026-07-31 10:45:26.80554",
+      "description": null
+    },
+    "pool": {
+      "id": "7c0a9e0b-e5de-49b0-92d1-6226be808b45",
+      "name": "Car Pool",
+      "icon": null,
+      "type": "ride",
+      "vehicleType": null,
+      "serviceType": "pool",
+      "baseFare": "20.00",
+      "farePerKm": "10.00",
+      "minimumFare": "0.00",
+      "waitingChargePerMin": "0.00",
+      "totalSeats": 4,
+      "isCarpool": true,
+      "isActive": true,
+      "createdAt": "2026-07-31 10:45:27.05563",
+      "description": null
+    }
+  },
+  "actors": {
+    "customerPrimary": {
+      "label": "customer-primary",
+      "phone": "9000000001",
+      "session": {
+        "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyMzExZmY0Ni1jN2Y4LTQ4OWMtYmY2Yi05YmMxMWFjMDY2YTUiLCJ1c2VyVHlwZSI6ImN1c3RvbWVyIiwiZGV2aWNlSWQiOiJxYS1zZWVkLWN1c3RvbWVyLWM3ZWQ3NTBhLWVmOTEtNDM4Ni05ZWQxLTkxZTQ0MDVlMDI1OSIsInR5cCI6ImFjY2VzcyIsImlhdCI6MTc4NTQ3NDkzOCwiZXhwIjoxNzg1NTE4MTM4LCJqdGkiOiIwNzBlZDUwNS00ODljLTRmMTUtOWE1Zi0wNDllMzJjYmU3MzAifQ.THHIpTMuiIx4wIjc2vnAp3brOwz4rSVcc64bPIkIfAQ",
+        "refreshToken": "2311ff46-c7f8-489c-bf6b-9bc11ac066a5:37553adabf1a74b5f1543ba2e43476c623d82a14a52d21ce7b4f0795319d5cb0a51d13eb4dff229c9f58aea88c5cbea0",
+        "expiresAt": "2026-07-31T17:15:38.000Z",
+        "user": {
+          "id": "2311ff46-c7f8-489c-bf6b-9bc11ac066a5",
+          "fullName": "Test Customer 1",
+          "phone": "9000000001",
+          "userType": "customer",
+          "walletBalance": 100
+        }
+      }
+    },
+    "customerSecondary": {
+      "label": "customer-secondary",
+      "phone": "9000000002",
+      "session": {
+        "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxZDY3ZTllNC04ZTk2LTQ3OTItYjQ0Yy03NGQ4YjQzYzg2N2YiLCJ1c2VyVHlwZSI6ImN1c3RvbWVyIiwiZGV2aWNlSWQiOiJxYS1zZWVkLWN1c3RvbWVyLTBkMGQ4NzFhLWVkZGItNDI5OS04Mjg1LWY4NDA3Yjk2MmE3YSIsInR5cCI6ImFjY2VzcyIsImlhdCI6MTc4NTQ3NDkzOCwiZXhwIjoxNzg1NTE4MTM4LCJqdGkiOiJlMmRjOTZjNy04MWE0LTRkN2ItOGU3NC02OTNjMDViYzhmNmQifQ.JB_W_KzCm9ygPmcTD0gR0Zd3MxmY5nYrd1tFDY80ovM",
+        "refreshToken": "1d67e9e4-8e96-4792-b44c-74d8b43c867f:200a90d993df05f3045695c3ca5f7d29bbdfd9ccf7e98959125ed1142dec2fc4ba929f56dbb4ec75c167da0b197cd2ac",
+        "expiresAt": "2026-07-31T17:15:38.000Z",
+        "user": {
+          "id": "1d67e9e4-8e96-4792-b44c-74d8b43c867f",
+          "fullName": "Test Customer 2",
+          "phone": "9000000002",
+          "userType": "customer",
+          "walletBalance": 100
+        }
+      }
+    },
+    "driverBikePrimary": {
+      "label": "driver-bike-primary",
+      "phone": "9100000001",
+      "session": {
+        "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2YjUyMTRlZS03YjFiLTQ1MWItOGFhYi0wN2YxOWZjNzM1YTgiLCJ1c2VyVHlwZSI6ImRyaXZlciIsImRldmljZUlkIjoicWEtc2VlZC1kcml2ZXItMDk4MzA4OTAtOWExNS00YWVlLWFkNjEtNmE4ZjU5MTIyNjdlIiwidHlwIjoiYWNjZXNzIiwiaWF0IjoxNzg1NDc0OTM4LCJleHAiOjE3ODU1MTgxMzgsImp0aSI6IjYxYTM2ZmYxLTNiMzAtNGVkZC1iMzU3LTk0ZjcwNzBjZjRlMCJ9.AiZ0MesGIaJR-5tcB_VMDcFUxozJGP4oY9Prj5F9PZY",
+        "refreshToken": "6b5214ee-7b1b-451b-8aab-07f19fc735a8:58c24e886767e2f9039363c7f74bdb9067e2156839f73f05dc2fbf21493b14b3584db170e41a1a235a08422a98602f2c",
+        "expiresAt": "2026-07-31T17:15:38.000Z",
+        "user": {
+          "id": "6b5214ee-7b1b-451b-8aab-07f19fc735a8",
+          "fullName": "Test Driver 1 (Bike)",
+          "phone": "9100000001",
+          "userType": "driver",
+          "walletBalance": 0
+        }
+      }
+    },
+    "driverBikeSecondary": {
+      "label": "driver-bike-secondary",
+      "phone": "9100000002",
+      "session": {
+        "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJlYWU4YTY2Yi1lMGMzLTQ4NjItODhkNi0wYzMxOTQwNGVjZTEiLCJ1c2VyVHlwZSI6ImRyaXZlciIsImRldmljZUlkIjoicWEtc2VlZC1kcml2ZXItMzQxNDA2YzQtNDIwMC00ZDViLWFhY2QtYzQzZjc2M2ZiMmY4IiwidHlwIjoiYWNjZXNzIiwiaWF0IjoxNzg1NDc0OTM4LCJleHAiOjE3ODU1MTgxMzgsImp0aSI6ImE5YzY4MjdlLTY2MzEtNDgxMy1hZDM4LWYxNGJjNmU3N2ZiMCJ9.MATSdz8ruc6TYJ4yIvxu2yfgZEidIKkPbwLToUhELM4",
+        "refreshToken": "eae8a66b-e0c3-4862-88d6-0c319404ece1:9073e43e5be2a98650053b71af67d06013488e045fe0ddac48a463d272a9d423d13fc74b3778b5f0e54f0737160dc147",
+        "expiresAt": "2026-07-31T17:15:38.000Z",
+        "user": {
+          "id": "eae8a66b-e0c3-4862-88d6-0c319404ece1",
+          "fullName": "Test Driver 2 (Bike)",
+          "phone": "9100000002",
+          "userType": "driver",
+          "walletBalance": 0
+        }
+      }
+    },
+    "driverBikeTertiary": {
+      "label": "driver-bike-tertiary",
+      "phone": "9100000003",
+      "session": {
+        "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI3ZTU1YjVlNC0zNGFjLTQxZmEtOTUxYS1mMWVkMTNhOWY2NjgiLCJ1c2VyVHlwZSI6ImRyaXZlciIsImRldmljZUlkIjoicWEtc2VlZC1kcml2ZXItNzIwM2RlYjUtNmZmYy00NTc2LWI1ZGQtNTNiNjQ0YzllNTQ0IiwidHlwIjoiYWNjZXNzIiwiaWF0IjoxNzg1NDc0OTM4LCJleHAiOjE3ODU1MTgxMzgsImp0aSI6IjYyNTNkZmQxLTkzNmItNDFiYy1hZjliLTM3NGIxZjBhNjhmZiJ9.FIG89rjKjR09xZtBz3mmiR-k1-B9-hGRfBlFxYPff6w",
+        "refreshToken": "7e55b5e4-34ac-41fa-951a-f1ed13a9f668:d2039fd03c7684a6fea6d261d7b6c986d1f25ebe40c553b1a7228c20347935acf587aaafa4ae5d40320c9c0f63036802",
+        "expiresAt": "2026-07-31T17:15:38.000Z",
+        "user": {
+          "id": "7e55b5e4-34ac-41fa-951a-f1ed13a9f668",
+          "fullName": "Test Driver 3 (Bike)",
+          "phone": "9100000003",
+          "userType": "driver",
+          "walletBalance": 0
+        }
+      }
+    },
+    "driverBikeQuaternary": {
+      "label": "driver-bike-quaternary",
+      "phone": "9100000004",
+      "session": {
+        "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI3MTIwYzM0OS01Y2QzLTRlOWItYWYyMC0yYWM4YTc1MzU5YWIiLCJ1c2VyVHlwZSI6ImRyaXZlciIsImRldmljZUlkIjoicWEtc2VlZC1kcml2ZXItODdlMmRiOGUtMDU4ZS00MzVkLWIzNmUtYTA1MTk2ZTFjOWI0IiwidHlwIjoiYWNjZXNzIiwiaWF0IjoxNzg1NDc0OTM4LCJleHAiOjE3ODU1MTgxMzgsImp0aSI6IjgyNDM4NzRhLTRjMDYtNDdjYi05ZTg1LTE1ZWM4MjgzZDU4OCJ9.xz7lZka0g82g1FpjOTFWaB-bk6BZ3pJzhqie52aPqck",
+        "refreshToken": "7120c349-5cd3-4e9b-af20-2ac8a75359ab:b5696bd1de3beaf2bbd3b8d1b7a1bd70de02283ea6f1709948dda90cfe05ac3d4d18726cd3ec10dad90ae59fab9d847c",
+        "expiresAt": "2026-07-31T17:15:38.000Z",
+        "user": {
+          "id": "7120c349-5cd3-4e9b-af20-2ac8a75359ab",
+          "fullName": "Test Driver 4 (Bike)",
+          "phone": "9100000004",
+          "userType": "driver",
+          "walletBalance": 0
+        }
+      }
+    },
+    "driverAutoPrimary": {
+      "label": "driver-auto-primary",
+      "phone": "9100000005",
+      "session": {
+        "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyYmQwYjA1Yi0yOWRjLTQzNDAtYTk5Zi0xMzZmYzhmMzFlYjUiLCJ1c2VyVHlwZSI6ImRyaXZlciIsImRldmljZUlkIjoicWEtc2VlZC1kcml2ZXItMDY5MzBiYTEtMTI3OS00YjcxLWIyMjYtMTRiZTZiMWExZDA4IiwidHlwIjoiYWNjZXNzIiwiaWF0IjoxNzg1NDc0OTM4LCJleHAiOjE3ODU1MTgxMzgsImp0aSI6IjBiZTBkODgxLTJlNzMtNDNiMy04MWY0LWVkZjA2NDVkODIyMyJ9.0lW_OAlKfE5oR8M09FUBMrlBN1uOwvuGfIP9J6TI2vA",
+        "refreshToken": "2bd0b05b-29dc-4340-a99f-136fc8f31eb5:2fb16f5f9d9bb49cc94fd6c83f325042fe3f3bdfec8457ea6c32aafbc4a0538b2cb02c1a2ff34384d9413a281d681b46",
+        "expiresAt": "2026-07-31T17:15:38.000Z",
+        "user": {
+          "id": "2bd0b05b-29dc-4340-a99f-136fc8f31eb5",
+          "fullName": "Test Driver 5 (Auto)",
+          "phone": "9100000005",
+          "userType": "driver",
+          "walletBalance": 0
+        }
+      }
+    },
+    "driverCabPrimary": {
+      "label": "driver-cab-primary",
+      "phone": "9100000008",
+      "session": {
+        "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmODRjMTNjNi02OTg2LTRkZmItYmI2Yi0zN2VmM2U0NDEyZDQiLCJ1c2VyVHlwZSI6ImRyaXZlciIsImRldmljZUlkIjoicWEtc2VlZC1kcml2ZXItYWExNjRlYzYtZDNjOS00ZThiLThkMzYtN2U3OTA5ZDFiYTc2IiwidHlwIjoiYWNjZXNzIiwiaWF0IjoxNzg1NDc0OTM4LCJleHAiOjE3ODU1MTgxMzgsImp0aSI6IjViZjBlNWFkLTcyYTktNDM0YS04MTFkLTNlNDU4NGZjYWVjMSJ9.baCL38f2vwDgSYRwJ0w87jaWk27OnWSj_gqjptHTZZ0",
+        "refreshToken": "f84c13c6-6986-4dfb-bb6b-37ef3e4412d4:fc514f8f023c763c7f9ae07991a5c94e130cee4d4bfe4a33515bfe8d9e7412e71079d36979f3d2797d19937422578eed",
+        "expiresAt": "2026-07-31T17:15:38.000Z",
+        "user": {
+          "id": "f84c13c6-6986-4dfb-bb6b-37ef3e4412d4",
+          "fullName": "Test Driver 8 (Cab)",
+          "phone": "9100000008",
+          "userType": "driver",
+          "walletBalance": 0
+        }
+      }
+    }
+  },
+  "artifacts": {
+    "tripIds": [
+      "f3436900-efaa-4e50-933e-741b9f41e5cf"
+    ],
+    "parcelOrderIds": [],
+    "outstationRideIds": [],
+    "notes": [],
+    "bookingEvents": [
+      {
+        "id": "f3436900-efaa-4e50-933e-741b9f41e5cf",
+        "customerPhone": "9000000001",
+        "kind": "ride-lifecycle",
+        "createdAt": "2026-07-31T05:16:08.175Z"
+      }
+    ]
+  }
+}

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 130 90" fill="none">
+  <rect x="8" y="32" width="82" height="28" rx="6" fill="#fef9c3" stroke="#b45309" stroke-width="3"/>
+  <path d="M8 44 L22 22 L76 22 L90 44" stroke="#b45309" stroke-width="3" fill="#fef08a"/>
+  <rect x="26" y="25" width="16" height="14" rx="2" fill="#bae6fd" stroke="#b45309" stroke-width="1.5"/>
+  <rect x="50" y="25" width="16" height="14" rx="2" fill="#bae6fd" stroke="#b45309" stroke-width="1.5"/>
+  <circle cx="28" cy="63" r="12" stroke="#b45309" stroke-width="4" fill="none"/>
+  <circle cx="28" cy="63" r="4" fill="#b45309"/>
+  <circle cx="78" cy="63" r="12" stroke="#b45309" stroke-width="4" fill="none"/>
+  <circle cx="78" cy="63" r="4" fill="#b45309"/>
+  <path d="M90 38 L108 38 L108 52 L90 52" stroke="#b45309" stroke-width="2.5" fill="#fef9c3"/>
+  <!-- People icons -->
+  <circle cx="34" cy="30" r="4" fill="#b45309"/>
+  <circle cx="58" cy="30" r="4" fill="#b45309"/>
+  <circle cx="82" cy="30" r="4" fill="#d97706"/>
+  <!-- Share badge -->
+  <circle cx="118" cy="18" r="12" fill="#b45309"/>
+  <text x="118" y="22" text-anchor="middle" font-size="10" fill="white" font-family="Arial" font-weight="bold">3</text>
+  <text x="60" y="82" text-anchor="middle" font-size="7" fill="#b45309" font-family="Arial" font-weight="bold">AUTO POOL • 3 SEATS</text>
+</svg>

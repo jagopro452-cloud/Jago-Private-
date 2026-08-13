@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 90" fill="none">
+  <rect x="2" y="32" width="136" height="36" rx="6" fill="#fef3c7" stroke="#b45309" stroke-width="3"/>
+  <rect x="2" y="32" width="44" height="36" rx="6" fill="#fde68a" stroke="#b45309" stroke-width="3"/>
+  <rect x="8" y="37" width="32" height="22" rx="3" fill="#bae6fd" stroke="#b45309" stroke-width="1.5"/>
+  <rect x="52" y="36" width="26" height="14" rx="2" fill="#fef3c7" stroke="#b45309" stroke-width="1.5"/>
+  <rect x="84" y="36" width="26" height="14" rx="2" fill="#fef3c7" stroke="#b45309" stroke-width="1.5"/>
+  <rect x="114" y="36" width="20" height="14" rx="2" fill="#fef3c7" stroke="#b45309" stroke-width="1.5"/>
+  <path d="M52 44 L134 44" stroke="#b45309" stroke-width="1"/>
+  <path d="M78 36 L78 50M106 36 L106 50" stroke="#b45309" stroke-width="1"/>
+  <circle cx="25" cy="70" r="13" stroke="#b45309" stroke-width="4" fill="none"/>
+  <circle cx="25" cy="70" r="4" fill="#b45309"/>
+  <circle cx="108" cy="70" r="13" stroke="#b45309" stroke-width="4" fill="none"/>
+  <circle cx="108" cy="70" r="4" fill="#b45309"/>
+  <rect x="2" y="40" width="8" height="8" rx="2" fill="#fbbf24"/>
+  <rect x="130" y="40" width="8" height="8" rx="2" fill="#ef4444"/>
+  <path d="M44 32 L44 68" stroke="#b45309" stroke-width="2.5"/>
+  <text x="70" y="14" text-anchor="middle" font-size="8" fill="#b45309" font-family="Arial" font-weight="bold">TATA ACE</text>
+  <text x="70" y="24" text-anchor="middle" font-size="7" fill="#92400e" font-family="Arial">750 kg • 6 CBM</text>
+</svg>

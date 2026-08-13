@@ -1,0 +1,5 @@
+ALTER TABLE IF EXISTS pool_ride_requests
+  ALTER COLUMN status TYPE VARCHAR(32);
+
+ALTER TABLE IF EXISTS driver_pool_sessions
+  ALTER COLUMN status TYPE VARCHAR(32);

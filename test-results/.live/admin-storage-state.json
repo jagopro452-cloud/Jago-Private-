@@ -1,0 +1,14 @@
+{
+  "cookies": [],
+  "origins": [
+    {
+      "origin": "http://127.0.0.1:5000",
+      "localStorage": [
+        {
+          "name": "jago-admin",
+          "value": "{\"id\":\"fc1e8e2e-d3f5-4ebe-b4bf-68f53fd2770c\",\"name\":\"JAGO QA Admin\",\"email\":\"qa-admin@jago.test\",\"role\":\"superadmin\",\"admin\":{\"id\":\"fc1e8e2e-d3f5-4ebe-b4bf-68f53fd2770c\",\"name\":\"JAGO QA Admin\",\"email\":\"qa-admin@jago.test\",\"role\":\"superadmin\"},\"token\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmYzFlOGUyZS1kM2Y1LTRlYmUtYjRiZi02OGY1M2ZkMjc3MGMiLCJyb2xlIjoic3VwZXJhZG1pbiIsImRldmljZUlkIjoicWEtc2VlZC1hZG1pbi05OWFmM2NjOC03N2RiLTRiYjgtYTc2Ni03MTUzMDU1YTU1NTciLCJ0eXAiOiJhZG1pbl9hY2Nlc3MiLCJpYXQiOjE3ODU0NzQ5MzgsImV4cCI6MTc4NTUxODEzOCwianRpIjoiNzJmM2ViMzItODQ1OS00NTgxLTkxYzgtMGEzMGY1ODJlOWJkIn0.HthSvP6sGjfhVoiHL7SRSInCl9JTKVwcyeCuCWVfP7E\",\"expiresAt\":\"2026-07-31T17:15:38.000Z\"}"
+        }
+      ]
+    }
+  ]
+}

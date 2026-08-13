@@ -1,0 +1,445 @@
+openapi: 3.1.0
+info:
+  title: JAGO Matching, Trip, and Location Internal APIs
+  version: 1.0.0
+  description: Internal service contracts for ride matching, trip lifecycle, and live location.
+servers:
+  - url: http://matching-service:7101
+    description: Matching Service
+  - url: http://trip-service:7102
+    description: Trip Service
+  - url: http://location-service:7103
+    description: Location Service
+
+tags:
+  - name: Matching
+  - name: TripLifecycle
+  - name: Location
+  - name: Tracking
+
+security:
+  - serviceTokenAuth: []
+
+paths:
+  /internal/matching/requests:
+    post:
+      tags: [Matching]
+      summary: Create matching request for a trip
+      operationId: createMatchingRequest
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+        - $ref: '#/components/parameters/XIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MatchingRequestCreate'
+      responses:
+        '202':
+          description: Matching request accepted asynchronously
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [matchingRequestId, status]
+                properties:
+                  matchingRequestId:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    enum: [queued, processing]
+
+  /internal/matching/requests/{matchingRequestId}:
+    get:
+      tags: [Matching]
+      summary: Get matching status and assigned driver
+      operationId: getMatchingRequestStatus
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+        - name: matchingRequestId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Current matching state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchingRequestStatus'
+
+  /internal/trips/{tripId}/accept:
+    post:
+      tags: [TripLifecycle]
+      summary: Driver accepts trip
+      operationId: acceptTrip
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+        - $ref: '#/components/parameters/XIdempotencyKey'
+        - name: tripId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [driverId]
+              properties:
+                driverId:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: Trip accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TripState'
+
+  /internal/trips/{tripId}/arrived:
+    post:
+      tags: [TripLifecycle]
+      summary: Mark trip as arrived and issue pickup OTP context
+      operationId: markArrived
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+        - name: tripId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Arrived at pickup
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TripState'
+
+  /internal/trips/{tripId}/start:
+    post:
+      tags: [TripLifecycle]
+      summary: Start trip after OTP validation
+      operationId: internalStartTrip
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+        - name: tripId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pickupOtp]
+              properties:
+                pickupOtp:
+                  type: string
+      responses:
+        '200':
+          description: Trip started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TripState'
+
+  /internal/trips/{tripId}/end:
+    post:
+      tags: [TripLifecycle]
+      summary: Complete trip and compute final settlement payload
+      operationId: internalEndTrip
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+        - name: tripId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [actualFare]
+              properties:
+                actualFare:
+                  type: number
+                  format: double
+                actualDistanceKm:
+                  type: number
+                  format: double
+      responses:
+        '200':
+          description: Trip ended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TripState'
+
+  /internal/location/driver:
+    post:
+      tags: [Location]
+      summary: Ingest driver location heartbeat
+      operationId: ingestDriverLocation
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DriverLocationHeartbeat'
+      responses:
+        '202':
+          description: Heartbeat accepted
+
+  /internal/location/nearby:
+    get:
+      tags: [Location]
+      summary: Query nearby drivers with cursor pagination
+      operationId: getNearbyDrivers
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+        - name: lat
+          in: query
+          required: true
+          schema:
+            type: number
+            format: double
+        - name: lng
+          in: query
+          required: true
+          schema:
+            type: number
+            format: double
+        - name: radiusKm
+          in: query
+          required: false
+          schema:
+            type: number
+            format: double
+            default: 5
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        '200':
+          description: Nearby drivers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NearbyDriversResponse'
+
+  /internal/tracking/trips/{tripId}/snapshot:
+    get:
+      tags: [Tracking]
+      summary: Current live tracking snapshot for trip
+      operationId: getTrackingSnapshot
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+        - name: tripId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrackingSnapshot'
+
+components:
+  parameters:
+    XRequestId:
+      name: X-Request-Id
+      in: header
+      required: false
+      schema:
+        type: string
+    XIdempotencyKey:
+      name: X-Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+
+  securitySchemes:
+    serviceTokenAuth:
+      type: apiKey
+      in: header
+      name: X-Service-Token
+
+  schemas:
+    MatchingRequestCreate:
+      type: object
+      required: [tripId, pickupLat, pickupLng]
+      properties:
+        tripId:
+          type: string
+          format: uuid
+        vehicleCategoryId:
+          type: string
+          format: uuid
+        pickupLat:
+          type: number
+          format: double
+        pickupLng:
+          type: number
+          format: double
+        maxCandidates:
+          type: integer
+          minimum: 1
+          maximum: 50
+          default: 5
+
+    MatchingRequestStatus:
+      type: object
+      required: [matchingRequestId, status]
+      properties:
+        matchingRequestId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [queued, processing, assigned, timeout, failed]
+        assignedDriverId:
+          type: string
+          format: uuid
+        candidates:
+          type: array
+          items:
+            $ref: '#/components/schemas/DriverCandidate'
+
+    DriverCandidate:
+      type: object
+      required: [driverId, score, distanceKm]
+      properties:
+        driverId:
+          type: string
+          format: uuid
+        score:
+          type: number
+          format: double
+        distanceKm:
+          type: number
+          format: double
+        etaMinutes:
+          type: integer
+
+    TripState:
+      type: object
+      required: [tripId, status]
+      properties:
+        tripId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [searching, accepted, arrived, on_the_way, completed, cancelled]
+        updatedAt:
+          type: string
+          format: date-time
+
+    DriverLocationHeartbeat:
+      type: object
+      required: [driverId, lat, lng, recordedAt]
+      properties:
+        driverId:
+          type: string
+          format: uuid
+        lat:
+          type: number
+          format: double
+        lng:
+          type: number
+          format: double
+        speedKmph:
+          type: number
+          format: double
+        heading:
+          type: number
+          format: double
+        isOnline:
+          type: boolean
+        recordedAt:
+          type: string
+          format: date-time
+
+    NearbyDriversResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/NearbyDriver'
+        nextCursor:
+          type: string
+
+    NearbyDriver:
+      type: object
+      required: [driverId, lat, lng]
+      properties:
+        driverId:
+          type: string
+          format: uuid
+        lat:
+          type: number
+          format: double
+        lng:
+          type: number
+          format: double
+        distanceKm:
+          type: number
+          format: double
+
+    TrackingSnapshot:
+      type: object
+      required: [tripId, driverLocation, etaMinutes]
+      properties:
+        tripId:
+          type: string
+          format: uuid
+        driverLocation:
+          type: object
+          required: [lat, lng]
+          properties:
+            lat:
+              type: number
+              format: double
+            lng:
+              type: number
+              format: double
+        routePolyline:
+          type: string
+        etaMinutes:
+          type: integer

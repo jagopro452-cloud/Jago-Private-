@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JAGO - Download Apps</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 900px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 50px;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            font-size: 1.1em;
+            color: #666;
+        }
+        
+        .apps-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 30px;
+            margin-bottom: 40px;
+        }
+        
+        .app-card {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 30px;
+            text-align: center;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            border: 2px solid transparent;
+        }
+        
+        .app-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(102, 126, 234, 0.2);
+            border-color: #667eea;
+        }
+        
+        .app-icon {
+            font-size: 60px;
+            margin-bottom: 20px;
+        }
+        
+        .app-card h2 {
+            font-size: 1.5em;
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        .app-card .version {
+            color: #667eea;
+            font-weight: bold;
+            font-size: 1.1em;
+            margin-bottom: 15px;
+        }
+        
+        .app-card p {
+            color: #666;
+            margin-bottom: 20px;
+            line-height: 1.6;
+        }
+        
+        .download-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 10px;
+            font-size: 1em;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            text-decoration: none;
+            display: inline-block;
+            width: 100%;
+        }
+        
+        .download-btn:hover {
+            transform: scale(1.02);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+        }
+        
+        .download-btn:active {
+            transform: scale(0.98);
+        }
+        
+        .info-section {
+            background: #f0f4ff;
+            border-left: 4px solid #667eea;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 40px;
+        }
+        
+        .info-section h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+        
+        .info-section ol {
+            margin-left: 20px;
+            color: #333;
+            line-height: 1.8;
+        }
+        
+        .info-section li {
+            margin-bottom: 10px;
+        }
+        
+        .features {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #ddd;
+        }
+        
+        .features h4 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 0.95em;
+        }
+        
+        .features ul {
+            list-style: none;
+            color: #666;
+            font-size: 0.9em;
+        }
+        
+        .features li:before {
+            content: "✓ ";
+            color: #667eea;
+            font-weight: bold;
+            margin-right: 8px;
+        }
+        
+        .warning {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            color: #856404;
+            font-size: 0.95em;
+        }
+        
+        .footer {
+            text-align: center;
+            margin-top: 40px;
+            color: #999;
+            font-size: 0.9em;
+        }
+        
+        @media (max-width: 600px) {
+            .container {
+                padding: 20px;
+            }
+            
+            .header h1 {
+                font-size: 1.8em;
+            }
+            
+            .app-card {
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📱 JAGO</h1>
+            <p>Download and Install Your App</p>
+        </div>
+        
+        <div class="apps-grid">
+            <!-- Customer App -->
+            <div class="app-card">
+                <div class="app-icon">👤</div>
+                <h2>Customer App</h2>
+                <div class="version">Latest</div>
+                <p>Book rides and order parcels</p>
+                <a href="/apks/jago-customer-latest.apk" class="download-btn">📥 Download (Latest, Downloads)</a>
+                <div class="features">
+                    <h4>Includes:</h4>
+                    <ul>
+                        <li>Book rides instantly</li>
+                        <li>Track driver location</li>
+                        <li>Send parcels</li>
+                        <li>In-app chat & calls</li>
+                        <li>Emergency SOS</li>
+                    </ul>
+                </div>
+            </div>
+            
+            <!-- Driver App -->
+            <div class="app-card">
+                <div class="app-icon">🚗</div>
+                <h2>Driver App</h2>
+                <div class="version">Latest</div>
+                <p>Accept rides and earn money</p>
+                <a href="/apks/jago-driver-latest.apk" class="download-btn">📥 Download (Latest, Downloads)</a>
+                <div class="features">
+                    <h4>Includes:</h4>
+                    <ul>
+                        <li>Receive ride requests</li>
+                        <li>Real-time navigation</li>
+                        <li>View earnings</li>
+                        <li>Accept parcels</li>
+                        <li>Driver support</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- System Downloads Section -->
+        <div class="info-section" style="margin-top: 30px;">
+            <h3>⬇️ System Downloads (Honest, Working APKs)</h3>
+            <ul style="list-style: none; color: #333; font-size: 1.05em;">
+                <li>👤 <a href="/apks/jago-customer-latest.apk" style="color:#667eea; font-weight:bold;">Customer App (Latest, System)</a></li>
+                <li>🚗 <a href="/apks/jago-driver-latest.apk" style="color:#764ba2; font-weight:bold;">Driver App (Latest, System)</a></li>
+            </ul>
+            <div style="color:#888; font-size:0.95em; margin-top:10px;">These are the real, working APKs directly from the system Downloads folder. Use these for honest testing and production installs. If you need a specific version, contact support.</div>
+        </div>
+        </div>
+        
+        <!-- Installation Guide -->
+        <div class="info-section">
+            <h3>🔧 How to Install (Simple Steps)</h3>
+            <ol>
+                <li><strong>Download:</strong> Click the download button above to get the APK file</li>
+                <li><strong>Wait:</strong> File will download (takes 1-2 minutes depending on WiFi)</li>
+                <li><strong>Open Downloads:</strong> Open "Downloads" folder on your phone</li>
+                <li><strong>Tap Install:</strong> Find the file and tap it to install</li>
+                <li><strong>Allow Installation:</strong> If asked about unknown apps, tap "Settings" → "Allow from this source" (one time only)</li>
+                <li><strong>Open App:</strong> After installation, tap "Open" or find JAGO icon on home screen</li>
+                <li><strong>Create Account:</strong> Sign up with phone number or email</li>
+                <li><strong>Done!</strong> Start using JAGO! 🎉</li>
+            </ol>
+            
+            <div class="warning">
+                ⚠️ <strong>Note:</strong> Your phone must allow installation from unknown sources. 
+                This is normal and safe. You only need to enable it once.
+            </div>
+        </div>
+        
+        <!-- Permissions -->
+        <div class="info-section" style="margin-top: 20px;">
+            <h3>📍 Required Permissions</h3>
+            <p style="margin-bottom: 15px;">The app needs these permissions to work:</p>
+            <ul style="list-style: none; color: #666;">
+                <li>📍 <strong>Location:</strong> To track rides and show driver location</li>
+                <li>📞 <strong>Phone:</strong> To make urgent calls</li>
+                <li>📷 <strong>Camera:</strong> For video calls (optional)</li>
+                <li>🎤 <strong>Microphone:</strong> For audio calls (optional)</li>
+            </ul>
+        </div>
+        
+        <!-- Troubleshooting -->
+        <div class="info-section" style="margin-top: 20px;">
+            <h3>❓ Troubleshooting</h3>
+            <p><strong>Download button not working?</strong></p>
+            <p style="margin: 10px 0; color: #666;">
+                Your phone may not allow downloads from links. Try:
+            </p>
+            <ol style="margin-left: 20px; color: #666;">
+                <li>Check WiFi connection</li>
+                <li>Use Chrome browser instead of built-in browser</li>
+                <li>If still stuck, ask someone to transfer the APK file via USB or WhatsApp</li>
+            </ol>
+            
+            <p style="margin-top: 20px; color: #666;">
+                <strong>Installation stopped?</strong> Your phone ran out of storage. Delete some photos/videos and try again.
+            </p>
+        </div>
+        
+        <!-- System Requirements -->
+        <div class="info-section" style="margin-top: 20px;">
+            <h3>⚙️ System Requirements</h3>
+            <ul style="list-style: none; color: #666;">
+                <li>✓ Android 7.0 or higher</li>
+                <li>✓ At least 150 MB free storage</li>
+                <li>✓ Internet connection (WiFi or 4G)</li>
+            </ul>
+        </div>
+        
+        <div class="footer">
+            <p>JAGO™ | All Rights Reserved © 2026</p>
+            <p style="margin-top: 10px;">Need help? Contact support@jagopro.com</p>
+        </div>
+    </div>
+</body>
+</html>

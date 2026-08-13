@@ -1,0 +1,136 @@
+name: Build iOS IPA
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'flutter_apps/customer_app/**'
+  workflow_dispatch:   # allow manual trigger from GitHub UI
+
+jobs:
+  build-ios:
+    name: Build & Sign iOS IPA
+    runs-on: macos-latest
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────────
+      - uses: actions/checkout@v4
+
+      # ── 2. Flutter ─────────────────────────────────────────────────────────
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.x'
+          channel: stable
+          cache: true
+
+      # ── 3. Get Flutter packages ────────────────────────────────────────────
+      # Must run before `pod install` — CocoaPods needs the Flutter-generated
+      # Podfile/plugin registration that `flutter pub get` produces. Running
+      # `pod install` first fails with "No `Podfile' found" (confirmed via a
+      # real failed run: no Podfile exists in the repo until Flutter generates
+      # one as part of this step).
+      - name: Flutter pub get
+        working-directory: flutter_apps/customer_app
+        run: flutter pub get
+
+      # ── 4. Install pods ────────────────────────────────────────────────────
+      - name: Install CocoaPods dependencies
+        working-directory: flutter_apps/customer_app/ios
+        run: |
+          pod repo update
+          pod install
+
+      # ── 4b. Detect which optional secrets are present ────────────────────────
+      # Step-level `if:` conditions cannot reference the secrets context directly
+      # (confirmed via a real failed run: GitHub rejects the whole workflow file
+      # with zero jobs created, not a runtime failure). Compute plain env flags
+      # here instead and branch on those below.
+      - name: Detect signing secrets
+        run: |
+          if [ -n "${{ secrets.IOS_CERTIFICATE_BASE64 }}" ]; then
+            echo "HAS_CERT=true" >> "$GITHUB_ENV"
+          else
+            echo "HAS_CERT=false" >> "$GITHUB_ENV"
+          fi
+          if [ -n "${{ secrets.APPLE_API_KEY_BASE64 }}" ]; then
+            echo "HAS_APPLE_API_KEY=true" >> "$GITHUB_ENV"
+          else
+            echo "HAS_APPLE_API_KEY=false" >> "$GITHUB_ENV"
+          fi
+
+      # ── 4. Import signing certificate ──────────────────────────────────────
+      # Requires GitHub Secrets:
+      #   IOS_CERTIFICATE_BASE64     – p12 cert, base64 encoded
+      #   IOS_CERTIFICATE_PASSWORD   – p12 password
+      #   IOS_PROVISIONING_PROFILE   – .mobileprovision, base64 encoded
+      - name: Import signing certificate
+        if: env.HAS_CERT == 'true'
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE }}
+        run: |
+          # Create keychain
+          security create-keychain -p "" build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security unlock-keychain -p "" build.keychain
+          security list-keychains -d user -s build.keychain login.keychain
+
+          # Import certificate
+          echo "$CERTIFICATE_BASE64" | base64 --decode > cert.p12
+          security import cert.p12 -k build.keychain -P "$CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/xcodebuild
+          security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
+
+          # Install provisioning profile
+          PP_PATH="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$PP_PATH"
+          echo "$PROVISIONING_PROFILE_BASE64" | base64 --decode > "$PP_PATH/jago_customer.mobileprovision"
+
+      # ── 6a. Build unsigned IPA (no Apple account needed) ───────────────────
+      - name: Build iOS (no codesign)
+        if: env.HAS_CERT == 'false'
+        working-directory: flutter_apps/customer_app
+        run: |
+          flutter build ios --release --no-codesign \
+            --dart-define=API_BASE_URL=https://jagopro.org
+          # Package into IPA
+          mkdir -p build/ios/ipa/Payload
+          cp -r build/ios/iphoneos/Runner.app build/ios/ipa/Payload/
+          cd build/ios/ipa
+          zip -r ../../../JAGO-Customer-unsigned.ipa Payload
+
+      # ── 6b. Build signed IPA (with Apple account) ─────────────────────────
+      - name: Build iOS (signed)
+        if: env.HAS_CERT == 'true'
+        working-directory: flutter_apps/customer_app
+        run: |
+          flutter build ipa --release \
+            --dart-define=API_BASE_URL=https://jagopro.org \
+            --export-options-plist=ios/ExportOptions.plist
+
+      # ── 7. Upload IPA as artifact ──────────────────────────────────────────
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: JAGO-Customer-iOS
+          path: |
+            flutter_apps/customer_app/JAGO-Customer-unsigned.ipa
+            flutter_apps/customer_app/build/ios/ipa/*.ipa
+          retention-days: 30
+
+      # ── 8. Upload to TestFlight (optional, requires Apple credentials) ──────
+      - name: Upload to TestFlight
+        if: env.HAS_APPLE_API_KEY == 'true'
+        env:
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          echo "$APPLE_API_KEY_BASE64" | base64 --decode > AuthKey.p8
+          xcrun altool --upload-app \
+            --type ios \
+            --file "flutter_apps/customer_app/build/ios/ipa/JAGO.ipa" \
+            --apiKey "$APPLE_API_KEY_ID" \
+            --apiIssuer "$APPLE_API_ISSUER_ID" \
+            --private-key-path AuthKey.p8

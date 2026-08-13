@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80" fill="none">
+  <circle cx="25" cy="58" r="16" stroke="#1d4ed8" stroke-width="4" fill="none"/>
+  <circle cx="95" cy="58" r="16" stroke="#1d4ed8" stroke-width="4" fill="none"/>
+  <circle cx="25" cy="58" r="5" fill="#1d4ed8"/>
+  <circle cx="95" cy="58" r="5" fill="#1d4ed8"/>
+  <path d="M25 58 L55 30 L75 30 L95 58" stroke="#1d4ed8" stroke-width="4" stroke-linejoin="round" fill="none"/>
+  <path d="M55 30 L50 18 L65 18 L70 30" stroke="#2563eb" stroke-width="3" stroke-linejoin="round" fill="#dbeafe"/>
+  <path d="M75 30 L85 42 L95 42" stroke="#1d4ed8" stroke-width="3" fill="none"/>
+  <path d="M42 42 L68 42" stroke="#1d4ed8" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="60" cy="22" r="4" fill="#3b82f6"/>
+  <text x="60" y="10" text-anchor="middle" font-size="8" fill="#1d4ed8" font-family="Arial" font-weight="bold">BIKE</text>
+</svg>

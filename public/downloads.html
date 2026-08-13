@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jago - Download Apps</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 800px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        
+        .header h1 {
+            font-size: 32px;
+            color: #1a1a1a;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            color: #666;
+            font-size: 16px;
+        }
+        
+        .apps {
+            display: grid;
+            gap: 20px;
+        }
+        
+        .app-card {
+            background: #f8f9fa;
+            border: 2px solid #e9ecef;
+            border-radius: 16px;
+            padding: 24px;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        
+        .app-card:hover {
+            border-color: #667eea;
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.15);
+            transform: translateY(-2px);
+        }
+        
+        .app-header {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+        
+        .app-icon {
+            font-size: 40px;
+            width: 60px;
+            height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 12px;
+            color: white;
+        }
+        
+        .app-info h3 {
+            font-size: 20px;
+            color: #1a1a1a;
+            margin-bottom: 4px;
+        }
+        
+        .app-info p {
+            color: #999;
+            font-size: 14px;
+        }
+        
+        .app-details {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin: 16px 0;
+            padding: 16px 0;
+            border-top: 1px solid #e9ecef;
+            border-bottom: 1px solid #e9ecef;
+        }
+        
+        .detail {
+            font-size: 13px;
+            color: #666;
+        }
+        
+        .detail strong {
+            display: block;
+            color: #1a1a1a;
+            margin-bottom: 4px;
+        }
+        
+        .download-btn {
+            width: 100%;
+            padding: 14px 24px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        
+        .download-btn:hover {
+            transform: scale(1.02);
+            box-shadow: 0 8px 20px rgba(102, 126, 234, 0.3);
+        }
+        
+        .badge {
+            display: inline-block;
+            background: #10b981;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+        
+        .footer {
+            margin-top: 40px;
+            padding-top: 24px;
+            border-top: 1px solid #e9ecef;
+            text-align: center;
+            color: #999;
+            font-size: 14px;
+        }
+        
+        @media (max-width: 600px) {
+            .container {
+                padding: 24px;
+            }
+            
+            .header h1 {
+                font-size: 24px;
+            }
+            
+            .app-details {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Jago App Downloads</h1>
+            <p>Get the latest versions with all improvements</p>
+        </div>
+        
+        <div class="apps">
+            <!-- Customer App -->
+            <div class="app-card">
+                <div class="badge">✅ Latest v1.0.58</div>
+                <div class="app-header">
+                    <div class="app-icon">👤</div>
+                    <div class="app-info">
+                        <h3>Customer App</h3>
+                        <p>Book rides on Jago</p>
+                    </div>
+                </div>
+                <div class="app-details">
+                    <div class="detail">
+                        <strong>Version</strong>
+                        1.0.56
+                    </div>
+                    <div class="detail">
+                        <strong>Size</strong>
+                        88.7 MB
+                    </div>
+                    <div class="detail">
+                        <strong>Fixes</strong>
+                        Offer Expiry Display
+                    </div>
+                    <div class="detail">
+                        <strong>Updated</strong>
+                        March 27, 2026
+                    </div>
+                </div>
+                <a href="/apks/jago-customer-latest.apk" class="download-btn" download>
+                    📥 Download APK
+                </a>
+            </div>
+            
+            <!-- Driver App -->
+            <div class="app-card">
+                <div class="badge">✅ Latest v1.0.60</div>
+                <div class="app-header">
+                    <div class="app-icon">🚗</div>
+                    <div class="app-info">
+                        <h3>Driver App</h3>
+                        <p>Start earning with Jago</p>
+                    </div>
+                </div>
+                <div class="app-details">
+                    <div class="detail">
+                        <strong>Version</strong>
+                        1.0.60
+                    </div>
+                    <div class="detail">
+                        <strong>Size</strong>
+                        60 MB
+                    </div>
+                    <div class="detail">
+                        <strong>Fixes</strong>
+                        Latest driver release package
+                    </div>
+                    <div class="detail">
+                        <strong>Updated</strong>
+                        March 27, 2026
+                    </div>
+                </div>
+                <a href="/apks/jago-driver-latest.apk" class="download-btn" download>
+                    📥 Download APK
+                </a>
+            </div>
+            
+            <!-- Pilot App -->
+            <div class="app-card">
+                <div class="badge">✅ Latest v1.0.60</div>
+                <div class="app-header">
+                    <div class="app-icon">✈️</div>
+                    <div class="app-info">
+                        <h3>Pilot App</h3>
+                        <p>Manage your fleet</p>
+                    </div>
+                </div>
+                <div class="app-details">
+                    <div class="detail">
+                        <strong>Version</strong>
+                        1.0.60
+                    </div>
+                    <div class="detail">
+                        <strong>Size</strong>
+                        60 MB
+                    </div>
+                    <div class="detail">
+                        <strong>Fixes</strong>
+                        Latest pilot release package
+                    </div>
+                    <div class="detail">
+                        <strong>Updated</strong>
+                        March 27, 2026
+                    </div>
+                </div>
+                <a href="/apks/jago-pilot-latest.apk" class="download-btn" download>
+                    📥 Download APK
+                </a>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>💡 These APKs include improved calendar date pickers and expiry date validation</p>
+            <p style="margin-top: 10px;">Need help? Contact support@jagopro.org</p>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,286 @@
+openapi: 3.1.0
+info:
+  title: JAGO Notification Service API
+  version: 1.0.0
+  description: Notification contracts for push, SMS, and in-app channels.
+servers:
+  - url: http://notification-service:7201
+    description: Internal service
+  - url: https://api.jago.app
+    description: Gateway facade
+
+tags:
+  - name: DeviceTokens
+  - name: NotificationDispatch
+  - name: NotificationInbox
+  - name: NotificationPreferences
+
+paths:
+  /internal/notifications/dispatch:
+    post:
+      tags: [NotificationDispatch]
+      summary: Dispatch a notification to one or many recipients
+      operationId: dispatchNotification
+      security:
+        - serviceTokenAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+        - $ref: '#/components/parameters/XIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DispatchNotificationRequest'
+      responses:
+        '202':
+          description: Dispatch queued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [dispatchId, status]
+                properties:
+                  dispatchId:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    enum: [queued]
+
+  /v1/devices/tokens:
+    post:
+      tags: [DeviceTokens]
+      summary: Register or update device push token
+      operationId: upsertDeviceToken
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [platform, token]
+              properties:
+                platform:
+                  type: string
+                  enum: [android, ios, web]
+                token:
+                  type: string
+                appVersion:
+                  type: string
+      responses:
+        '204':
+          description: Token stored
+
+  /v1/notifications:
+    get:
+      tags: [NotificationInbox]
+      summary: List notification inbox items
+      operationId: getNotificationInbox
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        '200':
+          description: Inbox list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationInboxResponse'
+
+  /v1/notifications/preferences:
+    get:
+      tags: [NotificationPreferences]
+      summary: Get user notification preferences
+      operationId: getNotificationPreferences
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Current preferences
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationPreferences'
+    put:
+      tags: [NotificationPreferences]
+      summary: Update user notification preferences
+      operationId: updateNotificationPreferences
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationPreferences'
+      responses:
+        '200':
+          description: Updated preferences
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationPreferences'
+
+webhooks:
+  notification.delivered:
+    post:
+      summary: Delivery callback emitted after notification reaches target channel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationDeliveryEvent'
+      responses:
+        '200':
+          description: Acknowledge event
+
+components:
+  parameters:
+    XRequestId:
+      name: X-Request-Id
+      in: header
+      required: false
+      schema:
+        type: string
+    XIdempotencyKey:
+      name: X-Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    serviceTokenAuth:
+      type: apiKey
+      in: header
+      name: X-Service-Token
+
+  schemas:
+    DispatchNotificationRequest:
+      type: object
+      required: [channel, title, body, recipients]
+      properties:
+        channel:
+          type: string
+          enum: [push, sms, in_app]
+        title:
+          type: string
+        body:
+          type: string
+        recipients:
+          type: array
+          items:
+            type: object
+            required: [userId]
+            properties:
+              userId:
+                type: string
+                format: uuid
+              phone:
+                type: string
+              locale:
+                type: string
+        data:
+          type: object
+          additionalProperties: true
+
+    NotificationInboxResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/InboxItem'
+        nextCursor:
+          type: string
+
+    InboxItem:
+      type: object
+      required: [id, channel, title, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        channel:
+          type: string
+          enum: [push, sms, in_app]
+        title:
+          type: string
+        body:
+          type: string
+        read:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+
+    NotificationPreferences:
+      type: object
+      properties:
+        pushEnabled:
+          type: boolean
+          default: true
+        smsEnabled:
+          type: boolean
+          default: true
+        inAppEnabled:
+          type: boolean
+          default: true
+        quietHours:
+          type: object
+          properties:
+            start:
+              type: string
+              example: "22:00"
+            end:
+              type: string
+              example: "07:00"
+
+    NotificationDeliveryEvent:
+      type: object
+      required: [dispatchId, recipientId, channel, status, deliveredAt]
+      properties:
+        dispatchId:
+          type: string
+          format: uuid
+        recipientId:
+          type: string
+          format: uuid
+        channel:
+          type: string
+          enum: [push, sms, in_app]
+        status:
+          type: string
+          enum: [delivered, failed]
+        errorCode:
+          type: string
+        deliveredAt:
+          type: string
+          format: date-time

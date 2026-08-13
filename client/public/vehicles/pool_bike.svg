@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 130 90" fill="none">
+  <circle cx="28" cy="62" r="15" stroke="#7c3aed" stroke-width="4" fill="none"/>
+  <circle cx="28" cy="62" r="5" fill="#7c3aed"/>
+  <circle cx="98" cy="62" r="15" stroke="#7c3aed" stroke-width="4" fill="none"/>
+  <circle cx="98" cy="62" r="5" fill="#7c3aed"/>
+  <path d="M28 62 L58 34 L78 34 L98 62" stroke="#7c3aed" stroke-width="4" stroke-linejoin="round" fill="none"/>
+  <path d="M58 34 L53 20 L68 20 L73 34" stroke="#7c3aed" stroke-width="3" fill="#ede9fe"/>
+  <!-- Rider 1 -->
+  <circle cx="55" cy="14" r="5" fill="#7c3aed"/>
+  <path d="M55 19 L55 30" stroke="#7c3aed" stroke-width="2.5"/>
+  <!-- Rider 2 -->
+  <circle cx="70" cy="14" r="5" fill="#a78bfa"/>
+  <path d="M70 19 L70 30" stroke="#a78bfa" stroke-width="2.5"/>
+  <!-- Share badge -->
+  <circle cx="108" cy="18" r="12" fill="#7c3aed"/>
+  <text x="108" y="22" text-anchor="middle" font-size="10" fill="white" font-family="Arial" font-weight="bold">2</text>
+  <text x="65" y="80" text-anchor="middle" font-size="7" fill="#7c3aed" font-family="Arial" font-weight="bold">BIKE POOL • 2 SEATS</text>
+</svg>

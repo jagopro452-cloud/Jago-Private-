@@ -1,0 +1,95 @@
+-- User signup + admin list schema sync for production DBs that missed earlier migrations.
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS name VARCHAR(255);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(255);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS mobile VARCHAR(20);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(20);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code VARCHAR(50);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_photo TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS rating NUMERIC(3, 2) DEFAULT 5.0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS wallet_balance NUMERIC(12, 2) DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_status VARCHAR(30) DEFAULT 'pending';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS onboard_date TIMESTAMP;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS free_period_end TIMESTAMP;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS launch_free_active BOOLEAN DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_commission_balance NUMERIC(12, 2) DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_gst_balance NUMERIC(12, 2) DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS total_pending_balance NUMERIC(12, 2) DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS lock_threshold NUMERIC(10, 2) DEFAULT 200;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_locked BOOLEAN DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS lock_reason TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
+
+UPDATE users
+SET
+  phone = COALESCE(NULLIF(phone, ''), NULLIF(mobile, '')),
+  mobile = COALESCE(NULLIF(mobile, ''), NULLIF(phone, '')),
+  full_name = COALESCE(NULLIF(full_name, ''), NULLIF(name, '')),
+  name = COALESCE(NULLIF(name, ''), NULLIF(full_name, '')),
+  wallet_balance = COALESCE(wallet_balance, 0),
+  verification_status = COALESCE(NULLIF(verification_status, ''), CASE WHEN COALESCE(user_type, '') = 'driver' THEN 'pending' ELSE 'verified' END),
+  updated_at = COALESCE(updated_at, NOW())
+WHERE id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS customer_profiles (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  city VARCHAR(120),
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_customer_profiles_user_id ON customer_profiles(user_id);
+
+INSERT INTO customer_profiles (user_id, city, created_at, updated_at)
+SELECT u.id, u.city, NOW(), NOW()
+FROM users u
+LEFT JOIN customer_profiles cp ON cp.user_id = u.id
+WHERE cp.user_id IS NULL
+  AND COALESCE(u.user_type, 'customer') = 'customer';
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token TEXT NOT NULL UNIQUE,
+  device_id TEXT NOT NULL,
+  ip_address TEXT,
+  user_agent TEXT,
+  expires_at TIMESTAMP NOT NULL,
+  revoked BOOLEAN NOT NULL DEFAULT false,
+  revoked_at TIMESTAMP,
+  last_active_at TIMESTAMP DEFAULT NOW(),
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  token TEXT NOT NULL UNIQUE,
+  device_id TEXT NOT NULL,
+  ip_address TEXT,
+  user_agent TEXT,
+  expires_at TIMESTAMP NOT NULL,
+  revoked BOOLEAN NOT NULL DEFAULT false,
+  revoked_at TIMESTAMP,
+  replaced_by_token TEXT,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS otp_request_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  phone VARCHAR(20) NOT NULL,
+  country_code VARCHAR(8) NOT NULL DEFAULT '+91',
+  device_id TEXT,
+  ip_address TEXT,
+  user_agent TEXT,
+  user_type VARCHAR(25) NOT NULL DEFAULT 'customer',
+  event_type VARCHAR(20) NOT NULL,
+  outcome VARCHAR(50) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token ON refresh_tokens(token);
+CREATE INDEX IF NOT EXISTS idx_otp_request_events_phone_created ON otp_request_events(phone, created_at DESC);

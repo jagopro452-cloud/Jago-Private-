@@ -1,0 +1,786 @@
+openapi: 3.1.0
+info:
+  title: JAGO Gateway Public API
+  version: 1.0.0
+  description: |
+    Public API contract for JAGO mobility super app.
+    Supports customer, driver, and admin-facing workflows.
+servers:
+  - url: https://api.jago.app
+    description: Production
+  - url: https://staging-api.jago.app
+    description: Staging
+
+tags:
+  - name: Auth
+  - name: Drivers
+  - name: Rides
+  - name: Trips
+  - name: Tracking
+  - name: Parcels
+  - name: Notifications
+
+security:
+  - bearerAuth: []
+
+paths:
+  /v1/auth/register:
+    post:
+      tags: [Auth]
+      summary: Register user or driver account
+      operationId: registerAccount
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+        - $ref: '#/components/parameters/XIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Account created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterResponse'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /v1/auth/otp/send:
+    post:
+      tags: [Auth]
+      summary: Send OTP to phone
+      operationId: sendOtp
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone, userType]
+              properties:
+                phone:
+                  type: string
+                userType:
+                  type: string
+                  enum: [customer, driver]
+      responses:
+        '200':
+          description: OTP sent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /v1/auth/otp/verify:
+    post:
+      tags: [Auth]
+      summary: Verify OTP and issue auth token
+      operationId: verifyOtp
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone, otp, userType]
+              properties:
+                phone:
+                  type: string
+                otp:
+                  type: string
+                userType:
+                  type: string
+                  enum: [customer, driver]
+      responses:
+        '200':
+          description: Token issued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, user]
+                properties:
+                  token:
+                    type: string
+                  user:
+                    $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /v1/drivers/onboarding/applications:
+    post:
+      tags: [Drivers]
+      summary: Submit driver onboarding/KYC application
+      operationId: createDriverOnboardingApplication
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+        - $ref: '#/components/parameters/XIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DriverOnboardingRequest'
+      responses:
+        '202':
+          description: Application accepted for review
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [applicationId, status]
+                properties:
+                  applicationId:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    enum: [submitted, under_review]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/drivers/onboarding/applications/{applicationId}:
+    get:
+      tags: [Drivers]
+      summary: Get driver onboarding status
+      operationId: getDriverOnboardingStatus
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+        - name: applicationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Application status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DriverOnboardingStatus'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /v1/rides/requests:
+    post:
+      tags: [Rides]
+      summary: Create ride request (bike/auto/car/intercity/car-sharing)
+      operationId: createRideRequest
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+        - $ref: '#/components/parameters/XIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RideRequestCreate'
+      responses:
+        '202':
+          description: Ride request accepted and matching started
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rideRequestId, tripId, status]
+                properties:
+                  rideRequestId:
+                    type: string
+                    format: uuid
+                  tripId:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    enum: [searching]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/rides/requests/{rideRequestId}:
+    get:
+      tags: [Rides]
+      summary: Get ride request and matching status
+      operationId: getRideRequest
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+        - name: rideRequestId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Ride request details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RideRequestStatus'
+
+  /v1/trips/{tripId}/start:
+    post:
+      tags: [Trips]
+      summary: Start trip with pickup OTP verification
+      operationId: startTrip
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+        - $ref: '#/components/parameters/XIdempotencyKey'
+        - name: tripId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pickupOtp]
+              properties:
+                pickupOtp:
+                  type: string
+      responses:
+        '200':
+          description: Trip started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TripStateResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /v1/trips/{tripId}/end:
+    post:
+      tags: [Trips]
+      summary: End trip and finalize fare
+      operationId: endTrip
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+        - $ref: '#/components/parameters/XIdempotencyKey'
+        - name: tripId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [actualFare]
+              properties:
+                actualFare:
+                  type: number
+                  format: double
+                actualDistanceKm:
+                  type: number
+                  format: double
+                tips:
+                  type: number
+                  format: double
+      responses:
+        '200':
+          description: Trip completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TripStateResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/trips/{tripId}/tracking:
+    get:
+      tags: [Tracking]
+      summary: Get current live tracking snapshot
+      operationId: getTripTrackingSnapshot
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+        - name: tripId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Live location and ETA snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrackingSnapshot'
+
+  /v1/trips/{tripId}/tracking/stream:
+    get:
+      tags: [Tracking]
+      summary: Server-Sent Events stream for live tracking updates
+      operationId: streamTripTracking
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+        - name: tripId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: text/event-stream with tracking updates
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+  /v1/parcels/bookings:
+    post:
+      tags: [Parcels]
+      summary: Create parcel or hyperlocal booking
+      operationId: createParcelBooking
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+        - $ref: '#/components/parameters/XIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ParcelBookingCreate'
+      responses:
+        '202':
+          description: Parcel booking accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [parcelBookingId, tripId, status]
+                properties:
+                  parcelBookingId:
+                    type: string
+                    format: uuid
+                  tripId:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    enum: [searching]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/notifications:
+    get:
+      tags: [Notifications]
+      summary: List notifications for authenticated user
+      operationId: listNotifications
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Notification list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationListResponse'
+
+  /v1/notifications/{notificationId}/read:
+    post:
+      tags: [Notifications]
+      summary: Mark notification as read
+      operationId: markNotificationRead
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+        - name: notificationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Marked as read
+
+components:
+  parameters:
+    XRequestId:
+      name: X-Request-Id
+      in: header
+      required: false
+      schema:
+        type: string
+      description: Correlation ID for tracing across services.
+    XIdempotencyKey:
+      name: X-Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+      description: Required for create/mutate operations in production clients.
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    ValidationError:
+      description: Validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Conflict:
+      description: State conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    TooManyRequests:
+      description: Too many requests
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unauthorized:
+      description: Authentication required or token invalid
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Forbidden:
+      description: Authenticated but not permitted
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        traceId:
+          type: string
+
+    User:
+      type: object
+      required: [id, userType, phone]
+      properties:
+        id:
+          type: string
+          format: uuid
+        fullName:
+          type: string
+        phone:
+          type: string
+        userType:
+          type: string
+          enum: [customer, driver, admin]
+
+    RegisterRequest:
+      type: object
+      required: [fullName, phone, userType]
+      properties:
+        fullName:
+          type: string
+        phone:
+          type: string
+        email:
+          type: string
+          format: email
+        userType:
+          type: string
+          enum: [customer, driver]
+        referralCode:
+          type: string
+
+    RegisterResponse:
+      type: object
+      required: [userId, status]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [registered, otp_required]
+
+    DriverOnboardingRequest:
+      type: object
+      required: [driverId, licenseNumber, vehicleNumber, vehicleModel]
+      properties:
+        driverId:
+          type: string
+          format: uuid
+        licenseNumber:
+          type: string
+        vehicleNumber:
+          type: string
+        vehicleModel:
+          type: string
+        vehicleCategoryId:
+          type: string
+          format: uuid
+        documents:
+          type: array
+          items:
+            type: object
+            required: [type, url]
+            properties:
+              type:
+                type: string
+              url:
+                type: string
+                format: uri
+
+    DriverOnboardingStatus:
+      type: object
+      required: [applicationId, status]
+      properties:
+        applicationId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [submitted, under_review, approved, rejected]
+        rejectionReason:
+          type: string
+
+    RideRequestCreate:
+      type: object
+      required: [serviceType, pickup, destination, paymentMethod]
+      properties:
+        serviceType:
+          type: string
+          enum: [bike, auto, car, intercity, car_sharing]
+        pickup:
+          $ref: '#/components/schemas/GeoPointAddress'
+        destination:
+          $ref: '#/components/schemas/GeoPointAddress'
+        vehicleCategoryId:
+          type: string
+          format: uuid
+        paymentMethod:
+          type: string
+          enum: [cash, wallet, upi, card]
+        seats:
+          type: integer
+          minimum: 1
+          maximum: 6
+        scheduleAt:
+          type: string
+          format: date-time
+
+    RideRequestStatus:
+      type: object
+      required: [rideRequestId, status]
+      properties:
+        rideRequestId:
+          type: string
+          format: uuid
+        tripId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [searching, accepted, arrived, on_the_way, completed, cancelled]
+        assignedDriver:
+          $ref: '#/components/schemas/AssignedDriver'
+
+    AssignedDriver:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        fullName:
+          type: string
+        rating:
+          type: number
+          format: double
+        vehicleNumber:
+          type: string
+        vehicleModel:
+          type: string
+        etaMinutes:
+          type: integer
+
+    TripStateResponse:
+      type: object
+      required: [tripId, status]
+      properties:
+        tripId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [accepted, arrived, on_the_way, completed]
+        fare:
+          type: number
+          format: double
+
+    TrackingSnapshot:
+      type: object
+      required: [tripId, driverLocation, etaMinutes]
+      properties:
+        tripId:
+          type: string
+          format: uuid
+        driverLocation:
+          $ref: '#/components/schemas/LatLng'
+        routePolyline:
+          type: string
+        etaMinutes:
+          type: integer
+
+    ParcelBookingCreate:
+      type: object
+      required: [pickup, destination, receiverName, receiverPhone, parcelType]
+      properties:
+        serviceType:
+          type: string
+          enum: [parcel, hyperlocal]
+          default: parcel
+        pickup:
+          $ref: '#/components/schemas/GeoPointAddress'
+        destination:
+          $ref: '#/components/schemas/GeoPointAddress'
+        receiverName:
+          type: string
+        receiverPhone:
+          type: string
+        parcelType:
+          type: string
+        weightKg:
+          type: number
+          format: double
+        helperRequired:
+          type: boolean
+        notes:
+          type: string
+
+    NotificationListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/NotificationItem'
+        nextCursor:
+          type: string
+
+    NotificationItem:
+      type: object
+      required: [id, channel, title, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        channel:
+          type: string
+          enum: [push, sms, in_app]
+        title:
+          type: string
+        body:
+          type: string
+        read:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+
+    GeoPointAddress:
+      type: object
+      required: [lat, lng, address]
+      properties:
+        lat:
+          type: number
+          format: double
+        lng:
+          type: number
+          format: double
+        address:
+          type: string
+
+    LatLng:
+      type: object
+      required: [lat, lng]
+      properties:
+        lat:
+          type: number
+          format: double
+        lng:
+          type: number
+          format: double

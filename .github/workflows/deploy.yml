@@ -1,0 +1,182 @@
+# Real production server: AWS EC2 instance (ap-south-1, Mumbai) - confirmed via
+# reverse DNS: ec2-15-207-65-184.ap-south-1.compute.amazonaws.com, owner AS16509
+# Amazon.com.
+#
+# Converted from a server-pull model to a GitHub Actions push model on
+# 2026-08-03 (Phase Z). Rollback strategy rebuilt after a first-production-run
+# incident (Phase Z.2) to snapshot the full app directory, not just dist/ and
+# node_modules/, with dist/index.js specifically broken out of the hardlink
+# (proven by direct test: esbuild rewrites it via truncate-in-place, which
+# silently corrupts a hardlinked "snapshot" the moment a rebuild runs).
+#
+# Build moved from the production server to the GitHub Actions runner on
+# 2026-08-03 (Phase AB) after a second production run failed npm ci with
+# `spawn ENOMEM` - the server is a single-vCPU, ~1GB instance running the
+# live app, Postgres, and Redis simultaneously; vm.overcommit_memory=2 on
+# that box means fork()-heavy operations like `npm ci` can fail even with
+# free RAM/swap present, because overcommit accounting is based on total
+# committed virtual memory (Node's own VSZ footprint is tens of GB), not
+# actual usage. The runner has far more headroom and isn't running any
+# production service, so `npm ci` and `npm run build` now happen there.
+# Node is pinned to 18.19.1 to match production exactly - this project has
+# at least one native-binding dependency (bcrypt), and a node_modules built
+# under a different Node major version would ship an ABI-incompatible
+# binary that fails at require() time on the server.
+name: Deploy to AWS EC2
+
+on:
+  push:
+    branches: [main]
+
+# Prevent two pushes to main from running overlapping deploys against the same
+# EC2 host/PM2 process (rsync --delete + pm2 delete/start are not safe to
+# interleave). Queue, don't cancel — a half-finished production deploy must
+# never be interrupted mid-flight.
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node (pinned to match production)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18.19.1'
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline
+
+      - name: Type check
+        run: npm run check
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Snapshot current deployment for rollback
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DO_HOST }}
+          username: ${{ secrets.DO_USER }}
+          key: ${{ secrets.DO_SSH_KEY }}
+          script: |
+            set -e
+            rm -rf /home/ubuntu/jago-app/app.rollback
+            cp -al /home/ubuntu/jago-app/app /home/ubuntu/jago-app/app.rollback
+            # dist/index.js was previously rewritten via truncate-in-place by
+            # esbuild running ON THE SERVER, which is why this special-case
+            # exists. The build no longer runs on the server - dist/index.js
+            # now arrives only via rsync (temp-file+rename, not in-place), so
+            # this is no longer strictly required, but is kept exactly as-is
+            # per "rollback remains unchanged" and remains correct either way.
+            if [ -f /home/ubuntu/jago-app/app/dist/index.js ]; then
+              rm -f /home/ubuntu/jago-app/app.rollback/dist/index.js
+              cp /home/ubuntu/jago-app/app/dist/index.js /home/ubuntu/jago-app/app.rollback/dist/index.js
+            fi
+            echo "Full pre-deploy snapshot created (hardlinked, except dist/index.js which is a true independent copy)"
+
+      - name: Sync repository to production server
+        uses: burnett01/rsync-deployments@7.0.1
+        with:
+          switches: >-
+            -avzr --delete
+            --exclude=.git/
+            --exclude=playwright-report/
+            --exclude=test-results/
+            --exclude=.env
+          path: ./
+          remote_path: /home/ubuntu/jago-app/app/
+          remote_host: ${{ secrets.DO_HOST }}
+          remote_user: ${{ secrets.DO_USER }}
+          remote_key: ${{ secrets.DO_SSH_KEY }}
+
+      - name: Restart via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DO_HOST }}
+          username: ${{ secrets.DO_USER }}
+          key: ${{ secrets.DO_SSH_KEY }}
+          script: |
+            set -e
+            cd /home/ubuntu/jago-app/app
+            set -a && source /home/ubuntu/jago-app/.env && set +a
+
+            # ── 1. Pre-deployment PostgreSQL backup — deploy stops if this fails ──
+            BACKUP_DIR=/home/ubuntu/jago-app/backups
+            mkdir -p "$BACKUP_DIR"
+            BACKUP_FILE="$BACKUP_DIR/pre-deploy-$(date +%Y%m%d-%H%M%S).sql.gz"
+            if ! pg_dump "$DATABASE_URL" | gzip > "$BACKUP_FILE"; then
+              echo "ERROR: pre-deployment backup failed - aborting deploy, nothing was changed"
+              rm -f "$BACKUP_FILE"
+              exit 1
+            fi
+            if [ ! -s "$BACKUP_FILE" ]; then
+              echo "ERROR: backup file is empty - aborting deploy, nothing was changed"
+              rm -f "$BACKUP_FILE"
+              exit 1
+            fi
+            echo "Backup OK: $BACKUP_FILE ($(du -h "$BACKUP_FILE" | cut -f1))"
+            ls -t "$BACKUP_DIR"/*.sql.gz 2>/dev/null | tail -n +11 | xargs -r rm -f
+
+            # ── 2. Restart (EC2 performs no compilation - dist/ and node_modules/
+            # arrived pre-built via rsync). Uses ecosystem.config.cjs so PM2 runs the
+            # configured cluster-mode setup instead of a raw single-instance fork-mode
+            # process. startOrReload matches the running process by the "name" field
+            # in ecosystem.config.cjs (jago-server) and does a graceful reload if it's
+            # already running, or a fresh start otherwise — no duplicate process. ──
+            pm2 startOrReload ecosystem.config.cjs --env production
+            pm2 save
+            sleep 8
+
+            # ── 3. Health check ──
+            if curl -sf http://localhost:5000/api/health; then
+              echo "Deploy OK"
+            else
+              echo "ERROR: health check failed after deploy"
+              exit 1
+            fi
+
+      - name: Rollback on failure
+        if: failure()
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DO_HOST }}
+          username: ${{ secrets.DO_USER }}
+          key: ${{ secrets.DO_SSH_KEY }}
+          script: |
+            set -e
+            if [ ! -d /home/ubuntu/jago-app/app.rollback ]; then
+              echo "CRITICAL: no pre-deploy snapshot available to roll back to - manual intervention required"
+              exit 1
+            fi
+            echo "Rolling back to pre-deploy snapshot (source tree, dist, and node_modules together)..."
+            rm -rf /home/ubuntu/jago-app/app
+            mv /home/ubuntu/jago-app/app.rollback /home/ubuntu/jago-app/app
+            cd /home/ubuntu/jago-app/app
+            set -a && source /home/ubuntu/jago-app/.env && set +a
+            pm2 startOrReload ecosystem.config.cjs --env production
+            pm2 save
+            sleep 8
+            if curl -sf http://localhost:5000/api/health; then
+              echo "Rollback OK - restored previous stable deployment (source, build, and dependencies all consistent)"
+            else
+              echo "CRITICAL: rollback health check also failed - manual intervention required"
+              exit 1
+            fi
+
+      - name: Clean up rollback snapshot
+        if: success()
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DO_HOST }}
+          username: ${{ secrets.DO_USER }}
+          key: ${{ secrets.DO_SSH_KEY }}
+          script: rm -rf /home/ubuntu/jago-app/app.rollback

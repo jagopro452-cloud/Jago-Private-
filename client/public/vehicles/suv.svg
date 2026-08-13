@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80" fill="none">
+  <rect x="3" y="35" width="114" height="26" rx="8" fill="#fee2e2" stroke="#dc2626" stroke-width="3"/>
+  <path d="M12 35 L20 12 L100 12 L108 35" stroke="#dc2626" stroke-width="3" fill="#fecaca"/>
+  <rect x="24" y="15" width="25" height="18" rx="3" fill="#bae6fd" stroke="#dc2626" stroke-width="1.5"/>
+  <rect x="70" y="15" width="25" height="18" rx="3" fill="#bae6fd" stroke="#dc2626" stroke-width="1.5"/>
+  <circle cx="28" cy="63" r="13" stroke="#dc2626" stroke-width="4" fill="none"/>
+  <circle cx="28" cy="63" r="4" fill="#dc2626"/>
+  <circle cx="92" cy="63" r="13" stroke="#dc2626" stroke-width="4" fill="none"/>
+  <circle cx="92" cy="63" r="4" fill="#dc2626"/>
+  <rect x="3" y="44" width="10" height="8" rx="2" fill="#fbbf24"/>
+  <rect x="107" y="44" width="10" height="8" rx="2" fill="#ef4444"/>
+  <path d="M100 12 L110 20 L110 35" stroke="#dc2626" stroke-width="2" fill="none"/>
+  <text x="60" y="9" text-anchor="middle" font-size="7" fill="#dc2626" font-family="Arial" font-weight="bold">SUV / XL</text>
+</svg>

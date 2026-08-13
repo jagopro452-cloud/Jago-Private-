@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 150 90" fill="none">
+  <rect x="2" y="28" width="146" height="40" rx="6" fill="#f0fdf4" stroke="#15803d" stroke-width="3"/>
+  <rect x="2" y="28" width="50" height="40" rx="6" fill="#dcfce7" stroke="#15803d" stroke-width="3"/>
+  <rect x="8" y="33" width="36" height="26" rx="3" fill="#bae6fd" stroke="#15803d" stroke-width="1.5"/>
+  <rect x="58" y="32" width="30" height="18" rx="2" fill="#dcfce7" stroke="#15803d" stroke-width="1.5"/>
+  <rect x="94" y="32" width="30" height="18" rx="2" fill="#dcfce7" stroke="#15803d" stroke-width="1.5"/>
+  <rect x="130" y="32" width="14" height="18" rx="2" fill="#dcfce7" stroke="#15803d" stroke-width="1.5"/>
+  <path d="M58 40 L144 40" stroke="#15803d" stroke-width="1"/>
+  <path d="M90 32 L90 50M122 32 L122 50" stroke="#15803d" stroke-width="1"/>
+  <circle cx="28" cy="71" r="14" stroke="#15803d" stroke-width="4" fill="none"/>
+  <circle cx="28" cy="71" r="5" fill="#15803d"/>
+  <circle cx="118" cy="71" r="14" stroke="#15803d" stroke-width="4" fill="none"/>
+  <circle cx="118" cy="71" r="5" fill="#15803d"/>
+  <rect x="2" y="38" width="9" height="9" rx="2" fill="#fbbf24"/>
+  <rect x="139" y="38" width="9" height="9" rx="2" fill="#ef4444"/>
+  <path d="M50 28 L50 68" stroke="#15803d" stroke-width="2.5"/>
+  <text x="75" y="12" text-anchor="middle" font-size="8" fill="#15803d" font-family="Arial" font-weight="bold">BOLERO PICKUP</text>
+  <text x="75" y="22" text-anchor="middle" font-size="7" fill="#166534" font-family="Arial">1500 kg • 10 CBM</text>
+</svg>

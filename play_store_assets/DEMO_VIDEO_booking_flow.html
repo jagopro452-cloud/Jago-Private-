@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>JAGO — Booking Demo Video</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { width:1080px; height:1920px; background:#000; font-family:'Segoe UI',Arial,sans-serif; overflow:hidden; position:relative; }
+
+  /* ===== PHONE FRAME ===== */
+  .phone-frame {
+    position:absolute; top:80px; left:140px;
+    width:800px; height:1720px;
+    border-radius:60px;
+    background:#060e22;
+    border:8px solid #1a2a4a;
+    box-shadow:0 0 80px rgba(59,130,246,0.3);
+    overflow:hidden;
+  }
+
+  /* ===== SLIDE CONTAINER ===== */
+  .slides { position:absolute; inset:0; }
+  .slide { position:absolute; inset:0; opacity:0; transition:opacity 0.8s ease; display:flex; flex-direction:column; }
+  .slide.active { opacity:1; }
+
+  /* ===== STATUS BAR ===== */
+  .sbar { height:52px; background:rgba(6,14,34,0.95); display:flex; align-items:center; justify-content:space-between; padding:0 32px; flex-shrink:0; }
+  .sbar-time { color:#fff; font-size:24px; font-weight:600; }
+  .sbar-icons { color:#fff; font-size:18px; }
+
+  /* ===== SLIDE 0: JAGO SPLASH ===== */
+  #s0 { background:linear-gradient(160deg,#030d24 0%,#0a1f55 50%,#030d24 100%); align-items:center; justify-content:center; }
+  .splash-logo { text-align:center; }
+  .splash-brand { font-size:120px; font-weight:900; color:#fff; letter-spacing:8px; }
+  .splash-brand span { color:#3B82F6; }
+  .splash-tag { font-size:32px; color:#93c5fd; margin-top:16px; font-style:italic; }
+  .splash-ring { width:300px; height:300px; border-radius:50%; border:4px solid rgba(59,130,246,0.3); position:relative; margin:60px auto; display:flex; align-items:center; justify-content:center; animation:spin 6s linear infinite; }
+  @keyframes spin { 100%{transform:rotate(360deg)} }
+  .splash-car { font-size:100px; animation:spin2 6s linear infinite; }
+  @keyframes spin2 { 100%{transform:rotate(-360deg)} }
+  .splash-sub { font-size:28px; color:#8899bb; margin-top:20px; }
+
+  /* ===== SLIDE 1: HOME ===== */
+  #s1 { background:#060e22; }
+  .home-top { padding:24px 32px; display:flex; align-items:center; justify-content:space-between; }
+  .home-brand { font-size:44px; font-weight:900; color:#fff; letter-spacing:2px; }
+  .home-brand span { color:#3B82F6; }
+  .home-greet { font-size:24px; color:#8899bb; }
+  .home-av { width:64px; height:64px; border-radius:50%; background:linear-gradient(135deg,#3B82F6,#1d4ed8); display:flex; align-items:center; justify-content:center; font-size:28px; color:#fff; font-weight:700; }
+  .loc-bar { margin:8px 28px; background:#0f1b3d; border-radius:16px; padding:20px 28px; display:flex; align-items:center; gap:16px; border:1px solid #243060; }
+  .ldot { width:18px; height:18px; background:#3B82F6; border-radius:50%; }
+  .lval { font-size:26px; color:#fff; font-weight:600; margin-top:4px; }
+  .llabel { font-size:18px; color:#8899bb; }
+  .map-home { flex:1; background:linear-gradient(180deg,#0f2050,#1a3a6b); position:relative; overflow:hidden; margin:16px 0; }
+  .map-road-h { position:absolute; height:3px; background:#3d6ab5; width:100%; }
+  .map-road-v { position:absolute; width:3px; background:#3d6ab5; height:100%; }
+  .ppin { position:absolute; top:40%; left:45%; font-size:44px; }
+  .pulsering { position:absolute; top:36%; left:38%; width:80px; height:80px; border:3px solid rgba(59,130,246,0.5); border-radius:50%; animation:pls 1.5s infinite; }
+  @keyframes pls { 0%{transform:scale(1);opacity:0.6}100%{transform:scale(2.2);opacity:0} }
+  .vgrid { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; padding:0 28px; margin-bottom:12px; }
+  .vcard { background:#0f1b3d; border-radius:16px; padding:20px 8px; text-align:center; border:2px solid transparent; }
+  .vcard.sel { border-color:#3B82F6; }
+  .ve { font-size:36px; }
+  .vn { font-size:18px; color:#fff; font-weight:600; margin-top:6px; }
+  .ve-eta { font-size:15px; color:#3B82F6; margin-top:3px; }
+  .book-btn-home { margin:8px 28px 20px; background:linear-gradient(135deg,#3B82F6,#1d4ed8); color:#fff; border:none; border-radius:16px; padding:26px; font-size:28px; font-weight:700; width:calc(100% - 56px); cursor:pointer; box-shadow:0 6px 20px rgba(59,130,246,0.4); }
+
+  /* ===== SLIDE 2: DESTINATION ===== */
+  #s2 { background:#060e22; }
+  .dest-header { padding:24px 32px; display:flex; align-items:center; gap:20px; }
+  .back { width:60px; height:60px; background:#162040; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:28px; }
+  .dest-title { font-size:32px; color:#fff; font-weight:700; }
+  .inp { background:#0f1b3d; margin:0 28px; border-radius:16px; padding:24px 28px; border:1px solid #162040; margin-bottom:16px; }
+  .inp + .inp { border:2px solid #3B82F6; }
+  .inp-label { font-size:18px; color:#8899bb; }
+  .inp-val { font-size:26px; color:#fff; font-weight:600; margin-top:4px; }
+  .typing-cursor { animation:blink 1s infinite; }
+  @keyframes blink { 0%,100%{opacity:1}50%{opacity:0} }
+  .sugg-label { font-size:24px; color:#8899bb; margin:16px 28px 12px; font-weight:600; }
+  .sugg { display:flex; align-items:center; gap:20px; padding:20px 28px; border-bottom:1px solid #0f1b3d; }
+  .sugg-ico { width:60px; height:60px; background:#162040; border-radius:14px; display:flex; align-items:center; justify-content:center; font-size:30px; }
+  .sugg-n { font-size:24px; color:#fff; font-weight:600; }
+  .sugg-a { font-size:18px; color:#8899bb; margin-top:4px; }
+  .sugg-d { font-size:20px; color:#3B82F6; font-weight:700; margin-left:auto; }
+
+  /* ===== SLIDE 3: FARE ===== */
+  #s3 { background:#060e22; }
+  .fare-head { padding:24px 32px; display:flex; align-items:center; gap:20px; }
+  .fare-ht { flex:1; }
+  .fare-ht-title { font-size:32px; color:#fff; font-weight:700; }
+  .fare-ht-r { font-size:18px; color:#8899bb; margin-top:4px; }
+  .rcard { margin:0 28px 12px; background:#0f1b3d; border-radius:16px; padding:24px 28px; border:1px solid #162040; }
+  .rcard.sel2 { border-color:#3B82F6; }
+  .rcard-row { display:flex; align-items:center; gap:20px; }
+  .rce { font-size:44px; }
+  .rci { flex:1; }
+  .rcn { font-size:26px; color:#fff; font-weight:700; }
+  .rcd { font-size:18px; color:#8899bb; margin-top:4px; }
+  .rceta { font-size:16px; color:#10b981; background:#0a2a1a; border-radius:10px; padding:5px 14px; display:inline-block; margin-top:6px; }
+  .rcf { text-align:right; }
+  .rcfamt { font-size:36px; color:#fff; font-weight:900; }
+  .rcfsub { font-size:16px; color:#8899bb; }
+  .ck { display:flex; align-items:center; justify-content:center; width:44px; height:44px; background:#3B82F6; border-radius:50%; font-size:22px; color:#fff; margin-left:8px; flex-shrink:0; }
+  .conf-btn { position:absolute; bottom:28px; left:28px; right:28px; background:linear-gradient(135deg,#3B82F6,#1d4ed8); color:#fff; border:none; border-radius:16px; padding:30px; font-size:30px; font-weight:700; cursor:pointer; box-shadow:0 8px 24px rgba(59,130,246,0.4); }
+
+  /* ===== SLIDE 4: FINDING DRIVER ===== */
+  #s4 { background:#060e22; align-items:center; justify-content:center; }
+  .finding-wrap { text-align:center; padding:40px; }
+  .finding-ring { width:300px; height:300px; position:relative; margin:0 auto 48px; }
+  .ring1 { position:absolute; inset:0; border-radius:50%; border:6px solid rgba(59,130,246,0.3); animation:ringpulse 2s infinite; }
+  .ring2 { position:absolute; inset:30px; border-radius:50%; border:6px solid rgba(59,130,246,0.5); animation:ringpulse 2s 0.5s infinite; }
+  .ring3 { position:absolute; inset:60px; border-radius:50%; border:6px solid #3B82F6; animation:ringpulse 2s 1s infinite; }
+  @keyframes ringpulse { 0%{opacity:1;transform:scale(1)} 100%{opacity:0;transform:scale(1.3)} }
+  .ring-center { position:absolute; inset:90px; background:#3B82F6; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:56px; box-shadow:0 0 40px rgba(59,130,246,0.6); }
+  .finding-title { font-size:44px; color:#fff; font-weight:800; margin-bottom:16px; }
+  .finding-sub { font-size:26px; color:#8899bb; }
+  .dots { display:inline-flex; gap:12px; margin-top:24px; }
+  .dot { width:16px; height:16px; background:#3B82F6; border-radius:50%; animation:dotpulse 1.2s infinite; }
+  .dot:nth-child(2){animation-delay:0.2s}
+  .dot:nth-child(3){animation-delay:0.4s}
+  @keyframes dotpulse { 0%,100%{opacity:0.3;transform:scale(0.8)}50%{opacity:1;transform:scale(1.2)} }
+  .nearby-drivers { display:flex; gap:24px; justify-content:center; margin-top:48px; }
+  .ndriver { background:#0f1b3d; border-radius:20px; padding:24px; text-align:center; border:1px solid #162040; width:160px; }
+  .nd-ico { font-size:44px; }
+  .nd-dist { font-size:22px; color:#3B82F6; font-weight:700; margin-top:8px; }
+  .nd-name { font-size:18px; color:#8899bb; margin-top:4px; }
+
+  /* ===== SLIDE 5: TRACKING ===== */
+  #s5 { background:#060e22; }
+  .track-map { flex:1; background:linear-gradient(180deg,#0f2050,#1a3a6b); position:relative; overflow:hidden; }
+  .tr-route { position:absolute; top:35%; left:20%; width:55%; height:4px; background:linear-gradient(90deg,#3B82F6,#60a5fa); border-radius:4px; }
+  .tr-route::before { content:''; position:absolute; left:-8px; top:-8px; width:20px; height:20px; background:#3B82F6; border-radius:50%; border:4px solid #fff; box-shadow:0 0 12px #3B82F6; }
+  .tr-dest { position:absolute; top:25%; right:18%; font-size:40px; }
+  .tr-car { position:absolute; top:30%; left:32%; font-size:48px; filter:drop-shadow(0 0 12px rgba(59,130,246,0.8)); animation:drive 3s ease-in-out infinite alternate; }
+  @keyframes drive { from{left:28%} to{left:40%} }
+  .eta-float { position:absolute; top:12%; left:50%; transform:translateX(-50%); background:rgba(10,20,50,0.9); border-radius:14px; padding:16px 28px; border:2px solid #3B82F6; display:flex; align-items:center; gap:12px; }
+  .eta-f-val { font-size:32px; color:#fff; font-weight:800; }
+  .eta-f-label { font-size:20px; color:#93c5fd; }
+  .track-panel { background:#0a1428; border-radius:32px 32px 0 0; padding:28px; flex-shrink:0; }
+  .track-status { display:flex; align-items:center; gap:12px; margin-bottom:16px; }
+  .ts-dot { width:14px; height:14px; background:#10b981; border-radius:50%; animation:blink 1s infinite; }
+  .ts-text { font-size:24px; color:#10b981; font-weight:700; }
+  .tr-driver { display:flex; align-items:center; gap:20px; background:#0f1b3d; border-radius:16px; padding:22px; margin-bottom:16px; }
+  .tr-av { width:72px; height:72px; border-radius:50%; background:linear-gradient(135deg,#1d4ed8,#3B82F6); display:flex; align-items:center; justify-content:center; font-size:32px; color:#fff; font-weight:700; border:3px solid #3B82F6; }
+  .tr-name { font-size:26px; color:#fff; font-weight:700; }
+  .tr-vehicle { font-size:18px; color:#8899bb; margin-top:4px; }
+  .tr-fare { font-size:30px; color:#fff; font-weight:800; margin-left:auto; }
+
+  /* ===== SLIDE 6: COMPLETE ===== */
+  #s6 { background:#060e22; align-items:center; justify-content:flex-start; padding-top:60px; }
+  .check-circle { width:200px; height:200px; background:linear-gradient(135deg,#10b981,#059669); border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:100px; margin:0 auto 32px; box-shadow:0 0 60px rgba(16,185,129,0.4); }
+  .cmp-title { font-size:52px; color:#fff; font-weight:900; text-align:center; }
+  .cmp-sub { font-size:26px; color:#8899bb; text-align:center; margin-top:8px; }
+  .cmp-fare { margin:32px 40px; background:linear-gradient(135deg,#0a2a1a,#0f3a24); border-radius:24px; padding:40px; text-align:center; border:2px solid #10b981; }
+  .cf-label { font-size:26px; color:#6ee7b7; }
+  .cf-amount { font-size:80px; color:#fff; font-weight:900; }
+  .cf-detail { display:flex; justify-content:center; gap:24px; margin-top:20px; }
+  .cf-badge { background:rgba(255,255,255,0.08); border-radius:12px; padding:10px 20px; font-size:20px; color:#fff; }
+  .stars-cmp { display:flex; justify-content:center; gap:16px; margin:24px 0 8px; }
+  .star-large { font-size:60px; }
+  .rate-cmp-btn { display:block; background:#f59e0b; color:#000; border:none; border-radius:16px; padding:24px 60px; font-size:28px; font-weight:700; cursor:pointer; margin:0 auto; }
+  .done-btn { display:block; margin:20px 40px 0; background:linear-gradient(135deg,#3B82F6,#1d4ed8); color:#fff; border:none; border-radius:16px; padding:28px; font-size:28px; font-weight:700; width:calc(100% - 80px); cursor:pointer; }
+
+  /* ===== BOTTOM NAV ALL ===== */
+  .bnav { height:100px; background:#050c1e; display:flex; align-items:center; justify-content:space-around; border-top:1px solid #0f1b3d; flex-shrink:0; }
+  .bni { display:flex; flex-direction:column; align-items:center; gap:6px; }
+  .bnii { font-size:30px; }
+  .bnil { font-size:15px; color:#8899bb; }
+
+  /* ===== PROGRESS DOTS ===== */
+  .progress-dots { position:absolute; bottom:16px; left:50%; transform:translateX(-50%); display:flex; gap:12px; z-index:100; }
+  .pdot { width:14px; height:14px; border-radius:50%; background:rgba(255,255,255,0.3); transition:all 0.3s; }
+  .pdot.cur { background:#3B82F6; width:40px; border-radius:7px; }
+
+  /* ===== SLIDE LABEL ===== */
+  .slide-label { position:absolute; top: 12px; left:50%; transform:translateX(-50%); background:rgba(59,130,246,0.9); color:#fff; font-size:20px; font-weight:700; border-radius:20px; padding:6px 20px; white-space:nowrap; z-index:50; }
+
+  /* ===== CONTROLS ===== */
+  .controls { position:absolute; bottom:0; left:0; right:0; height:80px; display:flex; align-items:center; justify-content:center; gap:0; background:#000; }
+  .ctrl-btn { flex:1; height:80px; background:none; border:none; border-top:1px solid #111; color:#666; font-size:28px; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all 0.2s; }
+  .ctrl-btn:hover { background:#111; color:#fff; }
+  .ctrl-play { background:#0d2040; color:#3B82F6; border-color:#1a3060; }
+
+  /* outer info */
+  .outer-brand { position:absolute; top:20px; left:0; right:0; text-align:center; }
+  .ob-title { font-size:36px; font-weight:900; color:#3B82F6; }
+  .ob-sub { font-size:18px; color:#666; margin-top:4px; }
+</style>
+</head>
+<body>
+
+<div class="outer-brand">
+  <div class="ob-title">JAGO — Move Smarter</div>
+  <div class="ob-sub">App Booking Demo · Screen Record for Play Store</div>
+</div>
+
+<div class="phone-frame">
+  <div class="slides">
+
+    <!-- SLIDE 0: Splash -->
+    <div class="slide active" id="s0">
+      <div class="splash-logo">
+        <div style="font-size:56px;margin-top:200px;">🚕</div>
+        <div class="splash-brand">J<span>A</span>GO</div>
+        <div class="splash-tag">Move Smarter.</div>
+        <div class="splash-ring"><div class="splash-car">🛺</div></div>
+        <div class="splash-sub">India's Smartest Ride Platform</div>
+      </div>
+    </div>
+
+    <!-- SLIDE 1: Home -->
+    <div class="slide" id="s1">
+      <div class="sbar"><span class="sbar-time">9:41</span><span class="sbar-icons">●●●● 🔋</span></div>
+      <div class="slide-label">📱 Customer App — Home</div>
+      <div class="home-top">
+        <div><div class="home-brand">J<span>A</span>GO</div><div class="home-greet">Good morning, Rahul 👋</div></div>
+        <div class="home-av">R</div>
+      </div>
+      <div class="loc-bar">
+        <div class="ldot"></div>
+        <div><div class="llabel">Your location</div><div class="lval">Madhapur, Hyderabad</div></div>
+      </div>
+      <div class="map-home">
+        <div class="map-road-h" style="top:25%"></div>
+        <div class="map-road-h" style="top:55%"></div>
+        <div class="map-road-h" style="top:80%"></div>
+        <div class="map-road-v" style="left:25%"></div>
+        <div class="map-road-v" style="left:55%"></div>
+        <div class="map-road-v" style="left:80%"></div>
+        <div class="pulsering"></div>
+        <div class="ppin">📍</div>
+      </div>
+      <div class="vgrid">
+        <div class="vcard sel"><div class="ve">🛺</div><div class="vn">Auto</div><div class="ve-eta">3 min</div></div>
+        <div class="vcard"><div class="ve">🚗</div><div class="vn">Mini</div><div class="ve-eta">5 min</div></div>
+        <div class="vcard"><div class="ve">📦</div><div class="vn">Parcel</div><div class="ve-eta">8 min</div></div>
+        <div class="vcard"><div class="ve">🚛</div><div class="vn">Cargo</div><div class="ve-eta">12 min</div></div>
+      </div>
+      <button class="book-btn-home">🔍 Search Destination</button>
+      <div class="bnav">
+        <div class="bni"><span class="bnii" style="filter:drop-shadow(0 0 6px #3B82F6);">🏠</span><span class="bnil" style="color:#3B82F6;">Home</span></div>
+        <div class="bni"><span class="bnii">🕐</span><span class="bnil">Rides</span></div>
+        <div class="bni"><span class="bnii">💰</span><span class="bnil">Wallet</span></div>
+        <div class="bni"><span class="bnii">👤</span><span class="bnil">Profile</span></div>
+      </div>
+    </div>
+
+    <!-- SLIDE 2: Destination -->
+    <div class="slide" id="s2">
+      <div class="sbar"><span class="sbar-time">9:42</span><span class="sbar-icons">●●●● 🔋</span></div>
+      <div class="slide-label">🗺 Enter Destination</div>
+      <div class="dest-header">
+        <div class="back">←</div>
+        <div class="dest-title">Where to?</div>
+      </div>
+      <div class="inp"><div class="inp-label">From</div><div class="inp-val">📍 Madhapur, Hyderabad</div></div>
+      <div class="inp" style="border:2px solid #3B82F6;">
+        <div class="inp-label">Destination</div>
+        <div class="inp-val">HITEC City<span class="typing-cursor">|</span></div>
+      </div>
+      <div class="sugg-label">📍 Suggestions</div>
+      <div class="sugg" style="background:#0d1f3a;">
+        <div class="sugg-ico">🏢</div>
+        <div><div class="sugg-n">HITEC City, Cyber Towers</div><div class="sugg-a">Madhapur Rd, Hyderabad</div></div>
+        <div class="sugg-d">2.8 km</div>
+      </div>
+      <div class="sugg"><div class="sugg-ico">🏥</div><div><div class="sugg-n">Apollo Hospital</div><div class="sugg-a">Jubilee Hills</div></div><div class="sugg-d">3.4 km</div></div>
+      <div class="sugg"><div class="sugg-ico">✈️</div><div><div class="sugg-n">Rajiv Gandhi Airport</div><div class="sugg-a">Shamshabad</div></div><div class="sugg-d">28 km</div></div>
+      <div class="sugg"><div class="sugg-ico">🛍️</div><div><div class="sugg-n">Inorbit Mall</div><div class="sugg-a">Cyberabad</div></div><div class="sugg-d">3.1 km</div></div>
+      <div class="bnav">
+        <div class="bni"><span class="bnii">🏠</span><span class="bnil">Home</span></div>
+        <div class="bni"><span class="bnii">🕐</span><span class="bnil">Rides</span></div>
+        <div class="bni"><span class="bnii">💰</span><span class="bnil">Wallet</span></div>
+        <div class="bni"><span class="bnii">👤</span><span class="bnil">Profile</span></div>
+      </div>
+    </div>
+
+    <!-- SLIDE 3: Fare -->
+    <div class="slide" id="s3">
+      <div class="sbar"><span class="sbar-time">9:43</span><span class="sbar-icons">●●●● 🔋</span></div>
+      <div class="slide-label">💵 Choose & Confirm Fare</div>
+      <div class="fare-head">
+        <div class="back">←</div>
+        <div class="fare-ht"><div class="fare-ht-title">Choose Ride</div><div class="fare-ht-r">Madhapur → HITEC City · 2.8 km</div></div>
+      </div>
+      <div class="rcard sel2">
+        <div class="rcard-row">
+          <div class="rce">🛺</div>
+          <div class="rci"><div class="rcn">Auto Rickshaw</div><div class="rcd">3-seater</div><div class="rceta">🕐 3 min away</div></div>
+          <div class="rcf"><div class="rcfamt">₹58</div><div class="rcfsub">estimated</div></div>
+          <div class="ck">✓</div>
+        </div>
+      </div>
+      <div class="rcard">
+        <div class="rcard-row">
+          <div class="rce">🚗</div>
+          <div class="rci"><div class="rcn">Mini Car</div><div class="rcd">4-seater, AC</div><div class="rceta">🕐 5 min</div></div>
+          <div class="rcf"><div class="rcfamt">₹94</div><div class="rcfsub">estimated</div></div>
+        </div>
+      </div>
+      <div class="rcard">
+        <div class="rcard-row">
+          <div class="rce">🏍️</div>
+          <div class="rci"><div class="rcn">Bike</div><div class="rcd">Fastest &amp; cheapest</div><div class="rceta">🕐 2 min</div></div>
+          <div class="rcf"><div class="rcfamt">₹38</div><div class="rcfsub">estimated</div></div>
+        </div>
+      </div>
+      <div class="rcard" style="background:#0a1a10;border:1px solid #0f3a1f;">
+        <div class="rcard-row">
+          <div style="font-size:36px;">🎟️</div>
+          <div class="rci"><div class="rcn" style="color:#10b981;">Apply Coupon</div><div class="rcd">Save up to ₹50</div></div>
+          <div style="font-size:24px;color:#10b981;margin-left:auto;">Apply ›</div>
+        </div>
+      </div>
+      <button class="conf-btn">🛺 Book Auto — ₹58</button>
+      <div class="bnav">
+        <div class="bni"><span class="bnii">🏠</span><span class="bnil">Home</span></div>
+        <div class="bni"><span class="bnii">🕐</span><span class="bnil">Rides</span></div>
+        <div class="bni"><span class="bnii">💰</span><span class="bnil">Wallet</span></div>
+        <div class="bni"><span class="bnii">👤</span><span class="bnil">Profile</span></div>
+      </div>
+    </div>
+
+    <!-- SLIDE 4: Finding Driver -->
+    <div class="slide" id="s4">
+      <div class="sbar"><span class="sbar-time">9:44</span><span class="sbar-icons">●●●● 🔋</span></div>
+      <div class="slide-label">🔍 Finding Your Driver</div>
+      <div class="finding-wrap">
+        <div class="finding-ring">
+          <div class="ring1"></div>
+          <div class="ring2"></div>
+          <div class="ring3"></div>
+          <div class="ring-center">🛺</div>
+        </div>
+        <div class="finding-title">Finding Driver...</div>
+        <div class="finding-sub">Matching you with the nearest pilot</div>
+        <div class="dots">
+          <div class="dot"></div><div class="dot"></div><div class="dot"></div>
+        </div>
+        <div style="margin-top:48px;">
+          <div style="font-size:22px;color:#8899bb;text-align:center;margin-bottom:24px;">Nearby Drivers</div>
+          <div class="nearby-drivers">
+            <div class="ndriver"><div class="nd-ico">🛺</div><div class="nd-dist">0.8 km</div><div class="nd-name">Ravi K.</div></div>
+            <div class="ndriver"><div class="nd-ico">🛺</div><div class="nd-dist">1.2 km</div><div class="nd-name">Suresh M.</div></div>
+            <div class="ndriver"><div class="nd-ico">🛺</div><div class="nd-dist">1.5 km</div><div class="nd-name">Kiran R.</div></div>
+          </div>
+        </div>
+        <div style="margin-top:56px;background:#0f1b3d;border-radius:20px;padding:28px;border:1px solid #162040;">
+          <div style="font-size:24px;color:#8899bb;text-align:center;">Pickup</div>
+          <div style="font-size:28px;color:#fff;font-weight:700;text-align:center;margin-top:8px;">📍 Madhapur, Hyderabad</div>
+          <div style="font-size:24px;color:#8899bb;text-align:center;margin-top:16px;">Drop</div>
+          <div style="font-size:28px;color:#fff;font-weight:700;text-align:center;margin-top:8px;">🏁 HITEC City, Cyber Towers</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SLIDE 5: Tracking -->
+    <div class="slide" id="s5">
+      <div class="sbar"><span class="sbar-time">9:46</span><span class="sbar-icons">●●●● 🔋</span></div>
+      <div class="slide-label">🗺 Live Tracking</div>
+      <div class="track-map">
+        <div class="map-road-h" style="top:25%"></div>
+        <div class="map-road-h" style="top:55%"></div>
+        <div class="map-road-v" style="left:25%"></div>
+        <div class="map-road-v" style="left:60%"></div>
+        <div class="tr-route"></div>
+        <div class="tr-dest">📍</div>
+        <div class="tr-car">🛺</div>
+        <div class="eta-float">
+          <span class="eta-f-val">3 min</span>
+          <span class="eta-f-label">Driver arriving</span>
+        </div>
+      </div>
+      <div class="track-panel">
+        <div class="track-status"><div class="ts-dot"></div><div class="ts-text">Driver is on the way!</div></div>
+        <div class="tr-driver">
+          <div class="tr-av">R</div>
+          <div>
+            <div class="tr-name">Ravi Kumar</div>
+            <div class="tr-vehicle">🛺 AP 28 TG 5678 · ⭐ 4.9</div>
+          </div>
+          <div class="tr-fare">₹58</div>
+          <div style="display:flex;gap:12px;margin-left:16px;">
+            <div style="width:56px;height:56px;background:#0a2a1a;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:26px;border:2px solid #10b981;">📞</div>
+            <div style="width:56px;height:56px;background:#0a1a3a;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:26px;border:2px solid #3B82F6;">💬</div>
+          </div>
+        </div>
+        <div style="background:#0f1b3d;border-radius:16px;padding:20px 24px;display:flex;align-items:center;justify-content:space-between;border:1px solid #162040;">
+          <div><div style="font-size:20px;color:#8899bb;">OTP to start ride</div><div style="font-size:48px;color:#fff;font-weight:900;letter-spacing:12px;margin-top:4px;">4721</div></div>
+          <div style="font-size:52px;">🔒</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SLIDE 6: Complete -->
+    <div class="slide" id="s6">
+      <div class="sbar"><span class="sbar-time">9:57</span><span class="sbar-icons">●●●● 🔋</span></div>
+      <div class="slide-label">✅ Trip Complete!</div>
+      <div class="check-circle">✅</div>
+      <div class="cmp-title">Trip Complete!</div>
+      <div class="cmp-sub">Hope you enjoyed the ride 😊</div>
+      <div class="cmp-fare">
+        <div class="cf-label">Fare Paid</div>
+        <div class="cf-amount">₹58</div>
+        <div class="cf-detail">
+          <div class="cf-badge">📏 2.8 km</div>
+          <div class="cf-badge">⏱️ 9 min</div>
+        </div>
+      </div>
+      <div style="text-align:center;padding:24px 0 8px;font-size:26px;color:#fff;font-weight:700;">Rate your ride</div>
+      <div class="stars-cmp">
+        <span class="star-large">⭐</span><span class="star-large">⭐</span><span class="star-large">⭐</span><span class="star-large">⭐</span><span class="star-large">⭐</span>
+      </div>
+      <button class="rate-cmp-btn">Submit Rating</button>
+      <button class="done-btn">🏠 Back to Home</button>
+    </div>
+
+  </div><!-- /slides -->
+
+  <div class="progress-dots" id="pdots"></div>
+</div><!-- /phone-frame -->
+
+<div class="controls">
+  <button class="ctrl-btn" id="btn-prev" onclick="prevSlide()">◀ Prev</button>
+  <button class="ctrl-btn ctrl-play" id="btn-auto" onclick="toggleAuto()">▶ Auto Play</button>
+  <button class="ctrl-btn" id="btn-next" onclick="nextSlide()">Next ▶</button>
+</div>
+
+<script>
+  const slideIds = ['s0','s1','s2','s3','s4','s5','s6'];
+  let cur = 0, timer = null;
+
+  function buildDots() {
+    const c = document.getElementById('pdots');
+    slideIds.forEach((_, i) => {
+      const d = document.createElement('div');
+      d.className = 'pdot' + (i === 0 ? ' cur' : '');
+      d.id = 'pd' + i;
+      d.onclick = () => goTo(i);
+      d.style.cursor = 'pointer';
+      c.appendChild(d);
+    });
+  }
+
+  function goTo(n) {
+    document.getElementById(slideIds[cur]).classList.remove('active');
+    document.getElementById('pd' + cur).classList.remove('cur');
+    cur = n;
+    document.getElementById(slideIds[cur]).classList.add('active');
+    document.getElementById('pd' + cur).classList.add('cur');
+  }
+
+  function nextSlide() { goTo((cur + 1) % slideIds.length); }
+  function prevSlide() { goTo((cur - 1 + slideIds.length) % slideIds.length); }
+
+  function toggleAuto() {
+    const btn = document.getElementById('btn-auto');
+    if (timer) {
+      clearInterval(timer); timer = null;
+      btn.textContent = '▶ Auto Play';
+    } else {
+      timer = setInterval(nextSlide, 2800);
+      btn.textContent = '⏸ Pause';
+    }
+  }
+
+  buildDots();
+  // Auto-start
+  toggleAuto();
+</script>
+</body>
+</html>

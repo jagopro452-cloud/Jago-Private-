@@ -1,0 +1,136 @@
+name: Build Flutter APKs
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: build-apks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # ubuntu-latest ships with ~14GB free disk, which is not enough for two
+      # full Flutter release builds (APK+AAB each) - confirmed via a real run
+      # that died silently (job log never uploaded, GitHub's "BlobNotFound"
+      # signature of a runner that ran out of resources) partway through the
+      # second app's build, right after the first app's ~14-minute build left
+      # its Gradle caches and build/ output on disk. Removing large preinstalled
+      # toolchains this workflow never uses frees several GB before building.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android/sdk/ndk \
+            /opt/ghc /usr/local/.ghcup "$AGENT_TOOLSDIRECTORY" \
+            /usr/local/lib/node_modules 2>/dev/null || true
+          df -h /
+
+      - uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+          
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.35.7'
+
+      # Release builds refuse to run without android/key.properties (see build.gradle:
+      # "Release signing requires android/key.properties"). Decode the keystore and
+      # write key.properties per app, same pattern as the iOS cert step in build-ios.yml.
+      # Requires GitHub Secrets: ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD,
+      # ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD.
+      - name: Set up Android signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "ANDROID_KEYSTORE_BASE64 not set - skipping signing setup (release build will fail by design)"
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+          for app in customer_app driver_app; do
+            cat > "flutter_apps/$app/android/key.properties" <<EOF
+          storePassword=$KEYSTORE_PASSWORD
+          keyPassword=$KEY_PASSWORD
+          keyAlias=$KEY_ALIAS
+          storeFile=$RUNNER_TEMP/release.jks
+          EOF
+          done
+
+      # google-services.json is correctly gitignored (Firebase config), so it's
+      # absent in CI - confirmed via a real failed run (processReleaseGoogleServices:
+      # "File google-services.json is missing"). Both apps use the same file (one
+      # Firebase project registers both package names as separate client entries),
+      # so a single secret covers both. Requires GitHub Secret: GOOGLE_SERVICES_JSON.
+      - name: Set up Firebase config
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -z "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+            echo "GOOGLE_SERVICES_JSON not set - skipping (release build will fail by design)"
+            exit 0
+          fi
+          for app in customer_app driver_app; do
+            echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > "flutter_apps/$app/android/app/google-services.json"
+          done
+
+      # Both apps' ApiConfig.baseUrl falls back to a hardcoded plaintext-HTTP IP
+      # (http://15.207.65.184:5000) when no --dart-define=API_BASE_URL is passed -
+      # confirmed by reading api_config.dart in both apps. The app code itself
+      # already provides the override mechanism ("Override at compile time");
+      # this was just never wired into CI. Wiring it to the same production
+      # domain already used in build-ios.yml and .do/app.yaml.
+      - name: Build Customer App
+        env:
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+        run: |
+          cd flutter_apps/customer_app
+          flutter pub get
+          flutter build apk --release \
+            --dart-define=API_BASE_URL=https://jagopro.org \
+            --dart-define=GOOGLE_MAPS_KEY=$GOOGLE_MAPS_API_KEY
+          flutter build appbundle --release \
+            --dart-define=API_BASE_URL=https://jagopro.org \
+            --dart-define=GOOGLE_MAPS_KEY=$GOOGLE_MAPS_API_KEY
+
+      # Free the space used by Customer App's intermediate build output
+      # (Gradle/R8 work dirs, .dart_tool caches) before starting Driver App -
+      # keeping only the final APK/AAB that "Upload" needs.
+      - name: Clean intermediate build output
+        run: |
+          rm -rf flutter_apps/customer_app/build/app/intermediates \
+                 flutter_apps/customer_app/build/app/tmp \
+                 flutter_apps/customer_app/.dart_tool 2>/dev/null || true
+          df -h /
+
+      - name: Build Driver App
+        env:
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+        run: |
+          cd flutter_apps/driver_app
+          flutter pub get
+          flutter build apk --release \
+            --dart-define=API_BASE_URL=https://jagopro.org \
+            --dart-define=GOOGLE_MAPS_KEY=$GOOGLE_MAPS_API_KEY
+          flutter build appbundle --release \
+            --dart-define=API_BASE_URL=https://jagopro.org \
+            --dart-define=GOOGLE_MAPS_KEY=$GOOGLE_MAPS_API_KEY
+
+      - name: Upload APKs and App Bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apks
+          path: |
+            flutter_apps/customer_app/build/app/outputs/flutter-apk/app-release.apk
+            flutter_apps/driver_app/build/app/outputs/flutter-apk/app-release.apk
+            flutter_apps/customer_app/build/app/outputs/bundle/release/app-release.aab
+            flutter_apps/driver_app/build/app/outputs/bundle/release/app-release.aab
