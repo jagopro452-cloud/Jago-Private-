@@ -429,6 +429,26 @@ class _JagoCustomerAppState extends State<JagoCustomerApp> with WidgetsBindingOb
               themeMode: mode,
               theme: _lightTheme(),
               darkTheme: _darkTheme(),
+              // Layouts throughout the app (e.g. the fare/payment step header,
+              // which packs a title next to a "For me/For else" toggle in a
+              // fixed-width row) assume a roughly 1x system font scale.
+              // Uncapped, a device with a large accessibility text size
+              // multiplies every font size well past what those rows can
+              // hold, forcing catastrophic mid-word wrapping. Clamping still
+              // honors the user's preference for larger text, just not
+              // without bound.
+              builder: (context, child) {
+                final mediaQuery = MediaQuery.of(context);
+                return MediaQuery(
+                  data: mediaQuery.copyWith(
+                    textScaler: mediaQuery.textScaler.clamp(
+                      minScaleFactor: 0.85,
+                      maxScaleFactor: 1.15,
+                    ),
+                  ),
+                  child: child!,
+                );
+              },
               home: const SplashScreen(),
             );
           },

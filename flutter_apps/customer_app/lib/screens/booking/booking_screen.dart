@@ -1670,19 +1670,6 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(14),
-                margin: const EdgeInsets.only(bottom: 12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFF00AA),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Text(
-                  'BUILD MARKER — FAREPAYMENT V3',
-                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
-                ),
-              ),
               _buildRouteSummaryCard(),
               const SizedBox(height: 12),
               _buildVehicleSummaryCard(),
