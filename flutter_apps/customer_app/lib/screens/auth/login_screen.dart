@@ -48,6 +48,12 @@ class _LoginScreenState extends State<LoginScreen>
         _cardCtrl.forward();
       }
     });
+    _phoneFocus.addListener(() {
+      if (mounted) setState(() {});
+    });
+    _phoneCtrl.addListener(() {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
@@ -265,22 +271,31 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   Widget _buildPhoneField() {
-    return Container(
+    final focused = _phoneFocus.hasFocus;
+    final valid = _phoneCtrl.text.length == 10;
+    final borderColor = focused
+        ? JT.primary
+        : (valid ? JT.success.withValues(alpha: 0.5) : const Color(0xFFD8E6F8));
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 150),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFD8E6F8), width: 1.2),
+        border: Border.all(color: borderColor, width: focused ? 1.8 : 1.2),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 12,
+            color: focused
+                ? JT.primary.withValues(alpha: 0.12)
+                : Colors.black.withValues(alpha: 0.04),
+            blurRadius: focused ? 16 : 12,
             offset: const Offset(0, 2),
           ),
         ],
       ),
       child: Row(
         children: [
-          Container(
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
             decoration: BoxDecoration(
               color: const Color(0xFFF2F7FF),
@@ -288,15 +303,15 @@ class _LoginScreenState extends State<LoginScreen>
                 topLeft: Radius.circular(14),
                 bottomLeft: Radius.circular(14),
               ),
-              border: const Border(
-                right: BorderSide(color: Color(0xFFD8E6F8), width: 1.2),
+              border: Border(
+                right: BorderSide(color: borderColor, width: focused ? 1.8 : 1.2),
               ),
             ),
             child: Text(
               '+91',
               style: GoogleFonts.poppins(
                 fontSize: 16,
-                fontWeight: FontWeight.w400,
+                fontWeight: FontWeight.w500,
                 color: JT.primary,
               ),
             ),
@@ -312,8 +327,9 @@ class _LoginScreenState extends State<LoginScreen>
               ],
               style: GoogleFonts.poppins(
                 fontSize: 16,
-                fontWeight: FontWeight.w400,
+                fontWeight: FontWeight.w500,
                 color: JT.textPrimary,
+                letterSpacing: 0.5,
               ),
               textInputAction: TextInputAction.done,
               onSubmitted: (_) => _continue(),
@@ -321,11 +337,15 @@ class _LoginScreenState extends State<LoginScreen>
                 hintText: 'Mobile number',
                 hintStyle: GoogleFonts.poppins(
                   fontSize: 14,
+                  fontWeight: FontWeight.w400,
                   color: JT.iconInactive,
                 ),
                 border: InputBorder.none,
                 contentPadding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+                suffixIcon: valid
+                    ? const Icon(Icons.check_circle_rounded, color: JT.success, size: 20)
+                    : null,
               ),
             ),
           ),

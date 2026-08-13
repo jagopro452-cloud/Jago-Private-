@@ -49,6 +49,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _statePollTimer; // 5s poll during searching — server is source of truth
   bool _homeLoading = true;
   Timer? _loadingTimeout;
+  // True until the services grid has made at least one location-aware fetch
+  // attempt (success or failure) — drives a "finding services near you"
+  // indicator so the Bike/Parcel-only pre-location fallback doesn't read as
+  // the complete list while a cold GPS fix is still in flight.
+  bool _servicesLoading = true;
+  Timer? _servicesLoadingTimeout;
 
   // New state: banners + feature flags
   List<Map<String, dynamic>> _banners = [];
@@ -82,6 +88,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // Safety fallback: never show loading more than 6 seconds
     _loadingTimeout = Timer(const Duration(seconds: 6), () {
       if (mounted && _homeLoading) setState(() => _homeLoading = false);
+    });
+    // Safety fallback: a stuck/slow GPS fix shouldn't leave the "finding
+    // services near you" indicator up forever — fall back to whatever the
+    // unfiltered fetch returned (or the Bike/Parcel default) after 10s.
+    _servicesLoadingTimeout = Timer(const Duration(seconds: 10), () {
+      if (mounted && _servicesLoading) setState(() => _servicesLoading = false);
     });
     // Auto-scroll banner every 4 seconds
     _bannerTimer = Timer.periodic(const Duration(seconds: 4), (_) {
@@ -697,6 +709,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _loadingTimeout?.cancel();
+    _servicesLoadingTimeout?.cancel();
     _bannerTimer?.cancel();
     _searchingTimer?.cancel();
     _statePollTimer?.cancel();
@@ -768,6 +781,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _getLocation() async {
     try {
       final fallbackPosition = await Geolocator.getLastKnownPosition();
+      // Fast path: a cold, high-accuracy GPS fix (below) can easily take
+      // 10-60+s on a fresh install (first-time permission prompt + no
+      // warm GPS lock). If the OS already has *any* last-known fix
+      // cached — common even for a brand-new app install, since it's
+      // often shared across apps via Google Play services — use it
+      // immediately so the map/services grid isn't stuck waiting. The
+      // accurate fix below still runs and overwrites this once it lands.
+      if (fallbackPosition != null && mounted && !_locationReady) {
+        setState(() {
+          _pickupLat = fallbackPosition.latitude;
+          _pickupLng = fallbackPosition.longitude;
+          _locationReady = true;
+          _pickup = 'Using last known location';
+        });
+        _reverseGeocode(fallbackPosition.latitude, fallbackPosition.longitude);
+        _fetchActiveServices();
+        _fetchNearbyDrivers();
+      }
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
         if (fallbackPosition != null && mounted) {
@@ -993,7 +1024,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final services = (data['services'] as List<dynamic>?)
                 ?.cast<Map<String, dynamic>>() ??
             [];
-        setState(() => _activeServices = services);
+        setState(() {
+          _activeServices = services;
+          // The location-filtered endpoint returns [] with no lat/lng, so
+          // only a location-aware attempt actually settles the "still
+          // finding services" state — an empty unfiltered response isn't
+          // a real answer yet.
+          if (_locationReady) _servicesLoading = false;
+        });
       }
     } catch (_) {
       // Fallback to non-location endpoint
@@ -1006,7 +1044,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           final services = (data['services'] as List<dynamic>?)
                   ?.cast<Map<String, dynamic>>() ??
               [];
-          setState(() => _activeServices = services);
+          setState(() {
+            _activeServices = services;
+            _servicesLoading = false;
+          });
         }
       } catch (_) {}
     }
@@ -1306,9 +1347,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 // Our Services Header
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: const Text("Our Services", style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Color(0xFF1E293B), letterSpacing: -0.5)),
+                  child: Row(
+                    children: [
+                      const Text("Our Services", style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Color(0xFF1E293B), letterSpacing: -0.5)),
+                      if (_servicesLoading) ...[
+                        const SizedBox(width: 10),
+                        const SizedBox(
+                          width: 13,
+                          height: 13,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF2C95F1)),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            "Finding services near you…",
+                            style: GoogleFonts.poppins(fontSize: 12, color: const Color(0xFF64748B)),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                 ),
-                
+
                 const SizedBox(height: 12),
                 
                 // Our Services Grid

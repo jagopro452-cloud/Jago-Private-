@@ -851,6 +851,10 @@ const loginLimiter = rateLimit({
 });
 
 // OTP rate limiter ï¿½ max 10 requests per hour per IP (extra protection beyond per-phone DB check)
+// Skipped in dev mode (DEV_MODE=true, fixed OTP testing) so QA cycling
+// through many phone numbers from one device/IP doesn't get locked out for
+// an hour — the per-phone/device checks in otp.service.ts are separately
+// relaxed the same way, for the same reason.
 const otpLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 10,
@@ -858,6 +862,10 @@ const otpLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   validate: { xForwardedForHeader: false },
+  skip: async () => {
+    const { isDevOtpEnabled } = await import("./auth/otp.service");
+    return isDevOtpEnabled();
+  },
 });
 
 // App API general rate limiter ï¿½ max 300 requests per minute per IP

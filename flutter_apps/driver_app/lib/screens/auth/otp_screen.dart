@@ -25,9 +25,14 @@ class OtpScreen extends StatefulWidget {
 }
 
 class _OtpScreenState extends State<OtpScreen> with TickerProviderStateMixin {
-  final List<TextEditingController> _otpCtrls =
-      List.generate(4, (_) => TextEditingController());
-  final List<FocusNode> _otpFocus = List.generate(4, (_) => FocusNode());
+  static const _otpLength = 4;
+
+  // A single hidden field drives input; the boxes below are pure decoration
+  // (centered Text, not TextFields) so there's no per-box font-metrics/
+  // padding alignment to fight with, and backspace/paste/focus-jumping are
+  // handled for free by the one real text field.
+  final _otpCtrl = TextEditingController();
+  final _otpFocus = FocusNode();
 
   bool _loading = false;
   bool _resending = false;
@@ -48,8 +53,11 @@ class _OtpScreenState extends State<OtpScreen> with TickerProviderStateMixin {
         .animate(CurvedAnimation(parent: _cardCtrl, curve: Curves.easeOutCubic));
     _cardCtrl.forward();
     _startResendTimer();
+    _otpFocus.addListener(() {
+      if (mounted) setState(() {});
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) FocusScope.of(context).requestFocus(_otpFocus.first);
+      if (mounted) FocusScope.of(context).requestFocus(_otpFocus);
     });
   }
 
@@ -57,12 +65,8 @@ class _OtpScreenState extends State<OtpScreen> with TickerProviderStateMixin {
   void dispose() {
     _resendTimer?.cancel();
     _cardCtrl.dispose();
-    for (final c in _otpCtrls) {
-      c.dispose();
-    }
-    for (final f in _otpFocus) {
-      f.dispose();
-    }
+    _otpCtrl.dispose();
+    _otpFocus.dispose();
     super.dispose();
   }
 
@@ -94,24 +98,17 @@ class _OtpScreenState extends State<OtpScreen> with TickerProviderStateMixin {
     );
   }
 
-  String get _otp => _otpCtrls.map((c) => c.text).join();
-
-  void _onDigitChanged(int index, String value) {
-    if (value.isNotEmpty && index < _otpCtrls.length - 1) {
-      FocusScope.of(context).requestFocus(_otpFocus[index + 1]);
-    }
-    if (value.isEmpty && index > 0) {
-      FocusScope.of(context).requestFocus(_otpFocus[index - 1]);
-    }
-    if (_otp.length == _otpCtrls.length) {
+  void _onOtpChanged(String value) {
+    setState(() {});
+    if (value.length == _otpLength) {
       FocusScope.of(context).unfocus();
       _verify();
     }
   }
 
   Future<void> _verify() async {
-    final otp = _otp;
-    if (otp.length != _otpCtrls.length) {
+    final otp = _otpCtrl.text;
+    if (otp.length != _otpLength) {
       _snack('Enter the complete OTP', error: true);
       return;
     }
@@ -135,10 +132,9 @@ class _OtpScreenState extends State<OtpScreen> with TickerProviderStateMixin {
     }
 
     _snack(res['message']?.toString() ?? 'Invalid OTP. Try again.', error: true);
-    for (final c in _otpCtrls) {
-      c.clear();
-    }
-    FocusScope.of(context).requestFocus(_otpFocus.first);
+    _otpCtrl.clear();
+    setState(() {});
+    FocusScope.of(context).requestFocus(_otpFocus);
   }
 
   void _promptOnboarding() {
@@ -227,10 +223,7 @@ class _OtpScreenState extends State<OtpScreen> with TickerProviderStateMixin {
                     Text("We've sent a 4-digit OTP to", textAlign: TextAlign.center, style: GoogleFonts.poppins(fontSize: 13, color: const Color(0xFF94A3B8))),
                     Text('+91 ${widget.phone}', style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w500, color: _dark)),
                     const SizedBox(height: 28),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: List.generate(_otpCtrls.length, (i) => _otpBox(i)),
-                    ),
+                    _buildOtpInput(),
                     const SizedBox(height: 20),
                     _resendSeconds > 0
                         ? Text('Resend OTP in 00:${_resendSeconds.toString().padLeft(2, '0')}', style: GoogleFonts.poppins(fontSize: 13, color: const Color(0xFF94A3B8)))
@@ -261,29 +254,70 @@ class _OtpScreenState extends State<OtpScreen> with TickerProviderStateMixin {
     );
   }
 
-  Widget _otpBox(int index) {
-    return Container(
-      width: 56,
-      height: 60,
-      margin: const EdgeInsets.symmetric(horizontal: 6),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: _otpFocus[index].hasFocus ? _blue : const Color(0xFFE2E8F0),
-          width: 1.4,
+  Widget _buildOtpInput() {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => FocusScope.of(context).requestFocus(_otpFocus),
+      child: SizedBox(
+        height: 60,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: List.generate(_otpLength, _otpBox),
+            ),
+            // Captures all keyboard input; invisible but functional. Sized
+            // to zero so it never affects layout or intercepts stray taps
+            // outside the boxes — the GestureDetector above handles that.
+            SizedBox(
+              width: 0,
+              height: 0,
+              child: Opacity(
+                opacity: 0,
+                child: TextField(
+                  controller: _otpCtrl,
+                  focusNode: _otpFocus,
+                  keyboardType: TextInputType.number,
+                  maxLength: _otpLength,
+                  showCursor: false,
+                  enableInteractiveSelection: false,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  decoration: const InputDecoration(counterText: ''),
+                  onChanged: _onOtpChanged,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
-      child: TextField(
-        controller: _otpCtrls[index],
-        focusNode: _otpFocus[index],
-        textAlign: TextAlign.center,
-        keyboardType: TextInputType.number,
-        maxLength: 1,
-        style: GoogleFonts.poppins(fontSize: 22, fontWeight: FontWeight.w500, color: _dark),
-        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-        decoration: const InputDecoration(counterText: '', border: InputBorder.none),
-        onChanged: (v) => _onDigitChanged(index, v),
+    );
+  }
+
+  Widget _otpBox(int index) {
+    final text = _otpCtrl.text;
+    final filled = index < text.length;
+    final isCursor = index == text.length && _otpFocus.hasFocus;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 150),
+      width: 52,
+      height: 58,
+      margin: const EdgeInsets.symmetric(horizontal: 6),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: filled ? const Color(0xFFEAF2FF) : const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isCursor ? _blue : (filled ? _blue.withValues(alpha: 0.35) : const Color(0xFFE2E8F0)),
+          width: isCursor ? 2 : 1.4,
+        ),
+        boxShadow: isCursor
+            ? [BoxShadow(color: _blue.withValues(alpha: 0.18), blurRadius: 10, offset: const Offset(0, 3))]
+            : null,
+      ),
+      child: Text(
+        filled ? text[index] : '',
+        style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.w600, color: _dark, height: 1.0),
       ),
     );
   }

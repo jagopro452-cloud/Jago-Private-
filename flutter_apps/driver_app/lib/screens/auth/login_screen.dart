@@ -16,6 +16,7 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin {
   final _phoneCtrl = TextEditingController();
+  final _phoneFocus = FocusNode();
   bool _loading = false;
 
   late final AnimationController _cardCtrl;
@@ -39,6 +40,12 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
     Future.delayed(const Duration(milliseconds: 160), () {
       if (mounted) _cardCtrl.forward();
     });
+    _phoneFocus.addListener(() {
+      if (mounted) setState(() {});
+    });
+    _phoneCtrl.addListener(() {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
@@ -46,6 +53,7 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
     _cardCtrl.dispose();
     _logoCtrl.dispose();
     _phoneCtrl.dispose();
+    _phoneFocus.dispose();
     super.dispose();
   }
 
@@ -180,24 +188,35 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
     );
   }
 
-  Widget _phoneField() => TextField(
-        controller: _phoneCtrl,
-        keyboardType: TextInputType.phone,
-        inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)],
-        textInputAction: TextInputAction.done,
-        onSubmitted: (_) => _continue(),
-        decoration: _decoration('Mobile number', Icons.phone_iphone_rounded, prefixText: '+91 '),
-      );
+  Widget _phoneField() {
+    final valid = _phoneCtrl.text.length == 10;
+    return TextField(
+      controller: _phoneCtrl,
+      focusNode: _phoneFocus,
+      keyboardType: TextInputType.phone,
+      inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)],
+      textInputAction: TextInputAction.done,
+      onSubmitted: (_) => _continue(),
+      style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w500, color: _dark, letterSpacing: 0.5),
+      decoration: _decoration(
+        'Mobile number',
+        Icons.phone_iphone_rounded,
+        prefixText: '+91 ',
+        suffixIcon: valid ? const Icon(Icons.check_circle_rounded, color: Color(0xFF16A34A), size: 20) : null,
+      ),
+    );
+  }
 
-  InputDecoration _decoration(String hint, IconData icon, {String? prefixText}) => InputDecoration(
+  InputDecoration _decoration(String hint, IconData icon, {String? prefixText, Widget? suffixIcon}) => InputDecoration(
         hintText: hint,
         prefixText: prefixText,
         prefixIcon: Icon(icon, color: _blue, size: 20),
+        suffixIcon: suffixIcon,
         filled: true,
         fillColor: const Color(0xFFF8FAFC),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: Color(0xFFE2E8F0))),
         enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: Color(0xFFE2E8F0))),
-        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: _blue, width: 1.4)),
+        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: _blue, width: 1.8)),
       );
 
   Widget _button(String label, VoidCallback onTap) => SizedBox(

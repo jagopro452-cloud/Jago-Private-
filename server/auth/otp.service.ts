@@ -80,7 +80,7 @@ function normalizeUserType(userType?: string): string {
 // To integrate Firebase later: verify the Firebase ID token here instead of
 // generateOtp()/hash comparison — the find-or-create-user and
 // session-issue logic below stays unchanged.
-function isDevOtpEnabled(): boolean {
+export function isDevOtpEnabled(): boolean {
   const explicit = String(process.env.DEV_MODE ?? "").trim().toLowerCase();
   if (explicit === "true") return true;
   if (explicit === "false") return false;
@@ -147,8 +147,10 @@ export async function sendOtpServiceWithMeta(
   }
 
   // Device-level check first (counts distinct phones attempted from this device)
+  // Skipped in dev mode — testers repeatedly cycling through numbers against
+  // the fixed OTP shouldn't get device-flagged the way real abuse would.
   const recentDistinctPhones = await countDistinctOtpPhonesForDevice(deviceId, OTP_REQUEST_WINDOW_MINUTES);
-  if (recentDistinctPhones >= 5) {
+  if (recentDistinctPhones >= 5 && !isDevOtpEnabled()) {
     await insertOtpRequestEvent({
       phone, countryCode, deviceId,
       ipAddress: requestMeta.ipAddress, userAgent: requestMeta.userAgent,
@@ -158,7 +160,10 @@ export async function sendOtpServiceWithMeta(
     throw new AuthApiError(429, "TOO_MANY_REQUESTS", "Please try again later");
   }
 
-  // Atomic per-phone rate limit check + event insert in one SQL statement (no TOCTOU race)
+  // Atomic per-phone rate limit check + event insert in one SQL statement (no TOCTOU race).
+  // Still recorded in dev mode (useful for observability), just not enforced —
+  // testers repeatedly re-sending OTPs to the same number during a debugging
+  // session shouldn't get locked out the way real abuse would.
   const { allowed, currentCount } = await tryInsertOtpAttemptAtomic({
     phone,
     countryCode,
@@ -169,7 +174,7 @@ export async function sendOtpServiceWithMeta(
     maxRequests: OTP_MAX_REQUESTS,
     windowMinutes: OTP_REQUEST_WINDOW_MINUTES,
   });
-  if (!allowed) {
+  if (!allowed && !isDevOtpEnabled()) {
     await insertOtpRequestEvent({
       phone, countryCode, deviceId,
       ipAddress: requestMeta.ipAddress, userAgent: requestMeta.userAgent,
@@ -297,7 +302,7 @@ export async function verifyOtpService(
     throw new AuthApiError(400, "OTP_EXPIRED", "OTP expired");
   }
 
-  if (otpRecord.attempts >= otpRecord.maxAttempts) {
+  if (otpRecord.attempts >= otpRecord.maxAttempts && !isDevOtpEnabled()) {
     await slowFailure();
     await insertOtpRequestEvent({
       phone,
