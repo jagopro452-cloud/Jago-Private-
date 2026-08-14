@@ -12163,7 +12163,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         JOIN vehicle_categories vc ON vc.id = f.vehicle_category_id
         WHERE 1=1
         ${vehicleCategoryId ? rawSql`AND f.vehicle_category_id = ${vehicleCategoryId}::uuid` : rawSql``}
-        ${category ? rawSql`AND vc.type = ${category}` : rawSql``}
+        -- vehicle_categories.type stores the vehicle's own classification
+        -- ("auto"/"car"/"motor_bike"/"parcel"), not a "ride"/"parcel"/"pool"
+        -- service category. The customer app sends category="ride" for every
+        -- normal ride booking, which never equals any real vc.type value, so
+        -- "AND vc.type = category" silently matched zero rows for every ride
+        -- booking (Bike, Auto, Cab, everything) and always fell through to
+        -- the client's synthetic fallback fares. "parcel" is the one value
+        -- that genuinely matches a real vc.type, so that case is preserved;
+        -- everything else just needs to exclude parcel/cargo vehicles.
+        ${category === 'parcel' ? rawSql`AND vc.type = 'parcel'` : category ? rawSql`AND vc.type != 'parcel'` : rawSql``}
         ORDER BY f.vehicle_category_id, vc.name
       `);
       const fareRows = camelize(fareR.rows);
