@@ -597,8 +597,8 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
     }
   }
 
-  Future<void> _estimateFare() async {
-    setState(() => _estimating = true);
+  Future<void> _estimateFare({bool isRetry = false}) async {
+    if (!isRetry) setState(() => _estimating = true);
     try {
       final headers = await AuthService.getHeaders();
       final body = <String, dynamic>{
@@ -608,9 +608,13 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
       };
       if (widget.vehicleCategoryId != null) body['vehicleCategoryId'] = widget.vehicleCategoryId;
       if (widget.category != null) body['category'] = widget.category;
+      // Generous timeout — this previously had none at all, so on a slow
+      // mobile connection a request could hang indefinitely or get dropped
+      // mid-flight, silently falling back to an unbookable client-side
+      // estimate ("Could not confirm fare for this vehicle").
       final res = await http.post(Uri.parse(ApiConfig.estimateFare),
         headers: headers,
-        body: jsonEncode(body));
+        body: jsonEncode(body)).timeout(const Duration(seconds: 20));
       if (res.statusCode == 200) {
         final data = jsonDecode(res.body);
         final rawFares = data['fares'];
@@ -680,7 +684,14 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
         if (mounted) setState(() => _allFares = _buildFallbackFares());
       }
     } catch (_) {
-      // Network error — show client-side estimates only on connectivity failure
+      // A dropped connection or timeout is common on weak mobile data and
+      // often transient — retry once before falling back to an unbookable
+      // client-side estimate, since a second attempt frequently succeeds
+      // where the first one got interrupted mid-request.
+      if (!isRetry) {
+        await _estimateFare(isRetry: true);
+        return;
+      }
       if (mounted) setState(() => _allFares = _buildFallbackFares());
     }
     if (mounted) setState(() => _estimating = false);
@@ -1225,6 +1236,10 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
           final canContinueFromVehicle =
               !_estimating && visibleFares.isNotEmpty && _selectedFareIndex < _allFares.length;
           final canContinueFromFare = !_loading && !_estimating;
+          final screenHeight = MediaQuery.of(context).size.height;
+          final sheetMaxHeight = _bookingStep == _BookingStep.farePayment
+              ? screenHeight * 0.5
+              : 360.0;
 
           return Stack(
             children: [
@@ -1258,14 +1273,14 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
                   mapToolbarEnabled: false,
                   compassEnabled: false,
                   padding: EdgeInsets.only(
-                    bottom: _bookingStep == _BookingStep.farePayment ? 500 : 320,
+                    bottom: sheetMaxHeight + 20,
                     top: 104,
                   ),
                 ),
               ),
               Positioned(
                 right: 16,
-                bottom: _bookingStep == _BookingStep.farePayment ? 556 : 376,
+                bottom: sheetMaxHeight + 56,
                 child: GestureDetector(
                   onTap: () => _fitMapToRoute(),
                   child: Container(
@@ -1309,40 +1324,35 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
                             const SizedBox(width: 12),
                             Expanded(
                               child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                                 decoration: BoxDecoration(
                                   color: Colors.white,
-                                  borderRadius: BorderRadius.circular(20),
+                                  borderRadius: BorderRadius.circular(18),
                                   boxShadow: JT.cardShadow,
                                 ),
-                                child: Row(
+                                child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            _bookingStepTitle,
-                                            style: GoogleFonts.poppins(
-                                              fontSize: 18,
-                                              fontWeight: FontWeight.w600,
-                                              color: JT.textPrimary,
-                                            ),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            _bookingStepSubtitle,
-                                            style: GoogleFonts.poppins(
-                                              fontSize: 12,
-                                              color: JT.textSecondary,
-                                            ),
-                                          ),
-                                        ],
+                                    Text(
+                                      _bookingStepTitle,
+                                      style: GoogleFonts.poppins(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w600,
+                                        color: JT.textPrimary,
                                       ),
                                     ),
+                                    if (_bookingStepSubtitle.isNotEmpty) ...[
+                                      const SizedBox(height: 3),
+                                      Text(
+                                        _bookingStepSubtitle,
+                                        style: GoogleFonts.poppins(
+                                          fontSize: 11,
+                                          color: JT.textSecondary,
+                                        ),
+                                      ),
+                                    ],
                                     if (_bookingStep == _BookingStep.farePayment) ...[
-                                      const SizedBox(width: 12),
+                                      const SizedBox(height: 8),
                                       _buildForWhomToggle(),
                                     ],
                                   ],
@@ -1361,9 +1371,7 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
               Align(
                 alignment: Alignment.bottomCenter,
                 child: Container(
-                  constraints: BoxConstraints(
-                    maxHeight: _bookingStep == _BookingStep.farePayment ? 540 : 360,
-                  ),
+                  constraints: BoxConstraints(maxHeight: sheetMaxHeight),
                   decoration: const BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
@@ -1504,7 +1512,7 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
       case _BookingStep.vehicle:
         return 'Choose your ride';
       case _BookingStep.farePayment:
-        return 'Review fare & payment';
+        return 'Review';
       case _BookingStep.confirm:
         return 'Confirm your trip';
     }
@@ -1517,7 +1525,7 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
       case _BookingStep.vehicle:
         return 'Select one vehicle option that fits this trip.';
       case _BookingStep.farePayment:
-        return 'Check your trip details, fare and payment options.';
+        return '';
       case _BookingStep.confirm:
         return 'Double-check your trip details before booking.';
     }
@@ -1671,15 +1679,15 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _buildRouteSummaryCard(),
-              const SizedBox(height: 12),
+              const SizedBox(height: 10),
               _buildVehicleSummaryCard(),
               if (_bookForSomeone) ...[
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
                 _buildForSomeoneElseForm(),
               ],
-              const SizedBox(height: 12),
+              const SizedBox(height: 10),
               if (_fare != null) _buildFareBreakdown(_fare!),
-              const SizedBox(height: 16),
+              const SizedBox(height: 14),
               _buildPaymentSection(),
             ],
           ),
@@ -1786,36 +1794,39 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
 
   Widget _buildForWhomToggle() {
     Widget segment({required bool selected, required IconData icon, required String label, required VoidCallback onTap}) {
-      return GestureDetector(
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: selected ? JT.primary : Colors.transparent,
-            borderRadius: BorderRadius.circular(20),
+      return Expanded(
+        child: GestureDetector(
+          onTap: onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            height: 32,
+            decoration: BoxDecoration(
+              color: selected ? JT.primary : Colors.transparent,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Icon(icon, size: 13, color: selected ? Colors.white : JT.textSecondary),
+              const SizedBox(width: 5),
+              Text(label,
+                  style: GoogleFonts.poppins(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: selected ? Colors.white : JT.textSecondary)),
+            ]),
           ),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(icon, size: 14, color: selected ? Colors.white : JT.textSecondary),
-            const SizedBox(width: 5),
-            Text(label,
-                style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: selected ? Colors.white : JT.textSecondary)),
-          ]),
         ),
       );
     }
 
     return Container(
+      width: double.infinity,
       padding: const EdgeInsets.all(3),
       decoration: BoxDecoration(
         color: JT.surfaceAlt,
         borderRadius: BorderRadius.circular(22),
         border: Border.all(color: JT.border),
       ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
+      child: Row(children: [
         segment(
           selected: !_bookForSomeone,
           icon: Icons.person_rounded,
@@ -1836,21 +1847,21 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
     Widget statChip(IconData icon, String value, String label) {
       return Expanded(
         child: Column(children: [
-          Icon(icon, color: JT.primary, size: 20),
-          const SizedBox(height: 6),
+          Icon(icon, color: JT.primary, size: 16),
+          const SizedBox(height: 3),
           Text(value,
               style: GoogleFonts.poppins(
-                  fontSize: 13, fontWeight: FontWeight.w700, color: JT.textPrimary)),
-          Text(label, style: GoogleFonts.poppins(fontSize: 10, color: JT.textSecondary)),
+                  fontSize: 11, fontWeight: FontWeight.w700, color: JT.textPrimary)),
+          Text(label, style: GoogleFonts.poppins(fontSize: 9, color: JT.textSecondary)),
         ]),
       );
     }
 
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: JT.surface,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(color: JT.border),
       ),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1858,27 +1869,27 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
           flex: 2,
           child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Column(children: [
-              Container(width: 8, height: 8, decoration: const BoxDecoration(color: Color(0xFF16A34A), shape: BoxShape.circle)),
-              Container(width: 1.4, height: 34, color: JT.border),
-              Container(width: 8, height: 8, decoration: const BoxDecoration(color: JT.primary, shape: BoxShape.circle)),
+              Container(width: 7, height: 7, decoration: const BoxDecoration(color: Color(0xFF16A34A), shape: BoxShape.circle)),
+              Container(width: 1.2, height: 22, color: JT.border),
+              Container(width: 7, height: 7, decoration: const BoxDecoration(color: JT.primary, shape: BoxShape.circle)),
             ]),
-            const SizedBox(width: 10),
+            const SizedBox(width: 8),
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text(_shortLocation(widget.pickup),
-                    style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w700, color: JT.textPrimary),
+                    style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w700, color: JT.textPrimary),
                     maxLines: 1, overflow: TextOverflow.ellipsis),
-                Text('Pickup location', style: GoogleFonts.poppins(fontSize: 10, color: JT.textSecondary)),
-                const SizedBox(height: 14),
+                Text('Pickup', style: GoogleFonts.poppins(fontSize: 9, color: JT.textSecondary)),
+                const SizedBox(height: 8),
                 Text(_shortLocation(widget.destination),
-                    style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w700, color: JT.textPrimary),
+                    style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w700, color: JT.textPrimary),
                     maxLines: 1, overflow: TextOverflow.ellipsis),
-                Text('Drop location', style: GoogleFonts.poppins(fontSize: 10, color: JT.textSecondary)),
+                Text('Drop', style: GoogleFonts.poppins(fontSize: 9, color: JT.textSecondary)),
               ]),
             ),
           ]),
         ),
-        Container(width: 1, height: 64, color: JT.border, margin: const EdgeInsets.symmetric(horizontal: 8)),
+        Container(width: 1, height: 44, color: JT.border, margin: const EdgeInsets.symmetric(horizontal: 6)),
         statChip(Icons.route_rounded, '${_distanceKm.toStringAsFixed(1)} km', 'Distance'),
         statChip(Icons.access_time_rounded, '${(_distanceKm * 3).ceil()} min', 'Est. Time'),
         statChip(Icons.alt_route_rounded, 'Best', 'Route'),
@@ -1890,83 +1901,82 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
     final imgKey = _vehicleImageKey(_vehicleName);
     final imgUrl = imgKey != null ? _vehicleImageUrls[imgKey] : null;
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: JT.surface,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(color: JT.border),
       ),
       child: Row(children: [
         Container(
-          width: 56,
-          height: 56,
-          decoration: BoxDecoration(color: JT.surfaceAlt, borderRadius: BorderRadius.circular(12)),
-          padding: const EdgeInsets.all(6),
+          width: 42,
+          height: 42,
+          decoration: BoxDecoration(color: JT.surfaceAlt, borderRadius: BorderRadius.circular(10)),
+          padding: const EdgeInsets.all(5),
           child: imgUrl != null
               ? Image.network(imgUrl, fit: BoxFit.contain,
-                  errorBuilder: (_, __, ___) => Icon(_iconForVehicle(_vehicleName), color: JT.primary))
-              : Icon(_iconForVehicle(_vehicleName), color: JT.primary),
+                  errorBuilder: (_, __, ___) => Icon(_iconForVehicle(_vehicleName), color: JT.primary, size: 18))
+              : Icon(_iconForVehicle(_vehicleName), color: JT.primary, size: 18),
         ),
-        const SizedBox(width: 12),
+        const SizedBox(width: 10),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Vehicle Selected', style: GoogleFonts.poppins(fontSize: 11, color: JT.textSecondary)),
             Text(_vehicleName,
-                style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w700, color: JT.textPrimary)),
-            const SizedBox(height: 2),
-            Row(children: [
-              Icon(Icons.person_rounded, size: 13, color: JT.textSecondary),
-              const SizedBox(width: 3),
-              Text(_isParcel ? 'Parcel' : '1 Rider',
-                  style: GoogleFonts.poppins(fontSize: 11, color: JT.textSecondary)),
-              const SizedBox(width: 10),
-              Icon(Icons.directions_car_rounded, size: 13, color: JT.textSecondary),
-              const SizedBox(width: 3),
-              Text('Any $_vehicleName', style: GoogleFonts.poppins(fontSize: 11, color: JT.textSecondary)),
-            ]),
+                style: GoogleFonts.poppins(fontSize: 13.5, fontWeight: FontWeight.w700, color: JT.textPrimary)),
+            Text(_isParcel ? 'Parcel • Any $_vehicleName' : '1 Rider • Any $_vehicleName',
+                style: GoogleFonts.poppins(fontSize: 10, color: JT.textSecondary),
+                maxLines: 1, overflow: TextOverflow.ellipsis),
           ]),
         ),
-        OutlinedButton(
-          onPressed: () => setState(() => _bookingStep = _BookingStep.vehicle),
-          style: OutlinedButton.styleFrom(
-            foregroundColor: JT.primary,
-            side: const BorderSide(color: JT.primary),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        const SizedBox(width: 8),
+        GestureDetector(
+          onTap: () => setState(() => _bookingStep = _BookingStep.vehicle),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(
+              border: Border.all(color: JT.primary),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Text('Change',
+                style: GoogleFonts.poppins(fontSize: 11.5, fontWeight: FontWeight.w600, color: JT.primary)),
           ),
-          child: Text('Change', style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w600)),
         ),
       ]),
     );
   }
 
   Widget _buildForSomeoneElseForm() {
-    Widget field(String label, TextEditingController ctrl, {String? prefix, TextInputType? keyboardType}) {
+    Widget field(String label, TextEditingController ctrl,
+        {required IconData icon, String? prefix, TextInputType? keyboardType}) {
       return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(label, style: GoogleFonts.poppins(fontSize: 11, color: JT.textSecondary)),
-        const SizedBox(height: 6),
+        Text(label, style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w500, color: JT.textSecondary)),
+        const SizedBox(height: 8),
         Container(
+          height: 52,
           decoration: BoxDecoration(
-            border: Border.all(color: JT.border),
-            borderRadius: BorderRadius.circular(12),
+            color: JT.surfaceAlt,
+            borderRadius: BorderRadius.circular(14),
           ),
-          padding: const EdgeInsets.symmetric(horizontal: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 14),
           child: Row(children: [
+            Icon(icon, size: 18, color: JT.textSecondary),
+            const SizedBox(width: 10),
             if (prefix != null) ...[
-              Text(prefix, style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w600, color: JT.textPrimary)),
-              const SizedBox(width: 6),
+              Text(prefix, style: GoogleFonts.poppins(fontSize: 15, fontWeight: FontWeight.w600, color: JT.textPrimary)),
+              const SizedBox(width: 8),
+              Container(width: 1, height: 20, color: JT.border),
+              const SizedBox(width: 8),
             ],
             Expanded(
               child: TextField(
                 controller: ctrl,
                 keyboardType: keyboardType,
-                style: GoogleFonts.poppins(fontSize: 14, color: JT.textPrimary),
+                style: GoogleFonts.poppins(fontSize: 15, fontWeight: FontWeight.w500, color: JT.textPrimary),
                 decoration: InputDecoration(
                   isDense: true,
                   border: InputBorder.none,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 14),
                   hintText: label == 'Full Name' ? 'Enter name' : 'Enter mobile number',
-                  hintStyle: GoogleFonts.poppins(fontSize: 13, color: const Color(0xFF94A3B8)),
+                  hintStyle: GoogleFonts.poppins(fontSize: 14, color: const Color(0xFF94A3B8)),
                 ),
               ),
             ),
@@ -1980,14 +1990,30 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
       return Expanded(
         child: GestureDetector(
           onTap: () => setState(() => _passengerGender = value),
-          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Icon(selected ? Icons.radio_button_checked_rounded : Icons.radio_button_off_rounded,
-                color: selected ? JT.primary : JT.textSecondary, size: 18),
-            const SizedBox(width: 6),
-            Icon(icon, size: 16, color: JT.textSecondary),
-            const SizedBox(width: 4),
-            Text(label, style: GoogleFonts.poppins(fontSize: 13, color: JT.textPrimary)),
-          ]),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            height: 52,
+            margin: EdgeInsets.only(
+              left: value == 'male' ? 4 : 2,
+              right: value == 'male' ? 2 : 4,
+              top: 4,
+              bottom: 4,
+            ),
+            decoration: BoxDecoration(
+              color: selected ? Colors.white : Colors.transparent,
+              borderRadius: BorderRadius.circular(11),
+              boxShadow: selected ? JT.cardShadow : null,
+            ),
+            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Icon(icon, size: 17, color: selected ? JT.primary : JT.textSecondary),
+              const SizedBox(width: 6),
+              Text(label,
+                  style: GoogleFonts.poppins(
+                      fontSize: 13.5,
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                      color: selected ? JT.textPrimary : JT.textSecondary)),
+            ]),
+          ),
         ),
       );
     }
@@ -2001,21 +2027,18 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text('Ride for someone else',
-            style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w600, color: JT.textPrimary)),
-        const SizedBox(height: 12),
-        Row(children: [
-          Expanded(child: field('Full Name', _passengerNameCtrl)),
-          const SizedBox(width: 10),
-          Expanded(
-            child: field('Mobile Number', _passengerPhoneCtrl, prefix: '+91', keyboardType: TextInputType.phone),
-          ),
-        ]),
+            style: GoogleFonts.poppins(fontSize: 15, fontWeight: FontWeight.w600, color: JT.textPrimary)),
         const SizedBox(height: 14),
-        Text('Gender', style: GoogleFonts.poppins(fontSize: 11, color: JT.textSecondary)),
+        field('Full Name', _passengerNameCtrl, icon: Icons.person_outline_rounded),
+        const SizedBox(height: 14),
+        field('Mobile Number', _passengerPhoneCtrl,
+            icon: Icons.phone_outlined, prefix: '+91', keyboardType: TextInputType.phone),
+        const SizedBox(height: 14),
+        Text('Gender', style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w500, color: JT.textSecondary)),
         const SizedBox(height: 8),
         Container(
-          decoration: BoxDecoration(border: Border.all(color: JT.border), borderRadius: BorderRadius.circular(12)),
-          padding: const EdgeInsets.symmetric(vertical: 12),
+          height: 52,
+          decoration: BoxDecoration(color: JT.surfaceAlt, borderRadius: BorderRadius.circular(14)),
           child: Row(children: [
             genderOption('male', Icons.male_rounded, 'Male'),
             genderOption('female', Icons.female_rounded, 'Female'),
@@ -2499,167 +2522,60 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
 
   // ignore: unused_element
   Widget _buildFareBreakdown(Map<String, dynamic> fare) {
-    const cardBg = Color(0xFFF8FAFF);
-    const borderCol = Color(0xFFE8EFFF);
-    const textMain = JT.textPrimary;
-    final textSub = Colors.grey.shade600;
-
-    final baseFare = (fare['baseFare'] ?? 0).toDouble();
-    final distanceFare = (fare['distanceFare'] ?? 0).toDouble();
-    final timeFare = (fare['timeFare'] ?? 0).toDouble();
-    final helperCharge = (fare['helperCharge'] ?? 0).toDouble();
-    final gst = (fare['gst'] ?? 0).toDouble();
-    final minFare = (fare['minimumFare'] ?? 0).toDouble();
-    final farePerKm = (fare['farePerKm'] ?? 0).toDouble();
-    final waitingChargePerMin = (fare['waitingChargePerMin'] ?? 0).toDouble();
-    final subtotal = (fare['subtotal'] ?? (baseFare + distanceFare + timeFare)).toDouble();
-    final isMinFareApplied = minFare > 0 && subtotal <= minFare + 0.01;
-    final isNight = fare['isNightCharge'] == true;
+    final hasDiscount = _promoDiscount > 0 || _autoDiscount > 0;
+    final originalFare = (fare['estimatedFare'] ?? 0).toDouble();
 
     return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: cardBg,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: borderCol),
+        color: JT.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: JT.border),
       ),
-      child: Column(children: [
-        // Header
-        Container(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
-          decoration: BoxDecoration(
-            color: _jagoPrimary.withValues(alpha: 0.06),
-            borderRadius: const BorderRadius.only(topLeft: Radius.circular(15), topRight: Radius.circular(15)),
-            border: Border(bottom: BorderSide(color: borderCol)),
-          ),
-          child: Row(children: [
-            const Icon(Icons.receipt_long_rounded, size: 16, color: _jagoPrimary),
-            const SizedBox(width: 8),
-            Text(_isParcel ? 'Delivery Fare Details' : 'Fare Breakdown',
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w400, color: _jagoPrimary)),
-            const Spacer(),
-            if (isMinFareApplied)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: JT.primary.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: JT.primary.withValues(alpha: 0.3)),
-                ),
-                child: const Text('Min fare', style: TextStyle(
-                  fontSize: 10, color: JT.primary, fontWeight: FontWeight.w400)),
-              )
-            else if (isNight)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: _blue.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: _blue.withValues(alpha: 0.3)),
-                ),
-                child: const Text('Night fare', style: TextStyle(
-                  fontSize: 10, color: _blue, fontWeight: FontWeight.w400)),
-              )
-            else
-              Text('Incl. GST', style: TextStyle(fontSize: 10, color: Colors.grey[400], fontWeight: FontWeight.w500)),
-          ]),
-        ),
-        Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(children: [
-            // Base fare row with rate info
-            _fareRow('Base Fare (Booking Fee)', '₹${baseFare.toStringAsFixed(0)}', textSub: textSub),
-            // Distance fare — always show when farePerKm > 0
-            if (farePerKm > 0) ...[
-              _fareRow(
-                '${_distanceKm.toStringAsFixed(1)} km × ₹${farePerKm.toStringAsFixed(0)}/km',
-                '₹${distanceFare.toStringAsFixed(0)}',
-                textSub: textSub,
-              ),
-            ] else if (distanceFare > 0)
-              _fareRow('Distance (${_distanceKm.toStringAsFixed(1)} km)',
-                '₹${distanceFare.toStringAsFixed(0)}', textSub: textSub),
-            if (timeFare > 0)
-              _fareRow('Time Charge (per min)', '₹${timeFare.toStringAsFixed(0)}', textSub: textSub),
-            if (waitingChargePerMin > 0)
-              _fareRow('Waiting Charge (₹${waitingChargePerMin.toStringAsFixed(0)}/min)', '—', textSub: textSub),
-            // Parcel-specific: helper charge (Porter style)
-            if (_isParcel && helperCharge > 0)
-              Container(
-                margin: const EdgeInsets.symmetric(vertical: 4),
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF10B981).withValues(alpha: 0.08),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.2)),
-                ),
-                child: Row(children: [
-                  const Icon(Icons.person_2_rounded, size: 13, color: Color(0xFF10B981)),
-                  const SizedBox(width: 6),
-                  Expanded(child: Text('Helper Charge (loading/unloading)',
-                    style: TextStyle(fontSize: 11, color: textSub))),
-                  Text('₹${helperCharge.toStringAsFixed(0)}',
-                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF10B981))),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_isParcel ? 'Delivery Total' : 'Trip Total',
+                    style: GoogleFonts.poppins(
+                        fontSize: 11.5, fontWeight: FontWeight.w500, color: JT.textSecondary)),
+                const SizedBox(height: 3),
+                Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                  Text('₹${_finalFare.toStringAsFixed(0)}',
+                      style: GoogleFonts.poppins(
+                          fontSize: 24, fontWeight: FontWeight.w700, color: JT.textPrimary)),
+                  if (hasDiscount) ...[
+                    const SizedBox(width: 6),
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Text('₹${originalFare.toStringAsFixed(0)}',
+                          style: GoogleFonts.poppins(
+                              fontSize: 12,
+                              color: JT.textSecondary,
+                              decoration: TextDecoration.lineThrough)),
+                    ),
+                  ],
                 ]),
-              )
-            else if (!_isParcel && helperCharge > 0)
-              _fareRow('Helper Charge', '₹${helperCharge.toStringAsFixed(0)}', textSub: textSub),
-            // Night multiplier
-            if (isNight) ...[
-              const SizedBox(height: 2),
-              Row(children: [
-                const Icon(Icons.nightlight_round, size: 12, color: _blue),
-                const SizedBox(width: 5),
-                Text('Night fare applies (1.0x–1.25x)',
-                  style: TextStyle(fontSize: 11, color: textSub, fontStyle: FontStyle.italic)),
-              ]),
-            ],
-            // Minimum fare note
-            if (minFare > 0) ...[
-              const SizedBox(height: 4),
-              Row(children: [
-                Icon(Icons.info_outline_rounded, size: 12, color: Colors.grey[400]),
-                const SizedBox(width: 5),
-                Text('Minimum fare: ₹${minFare.toStringAsFixed(0)}',
-                  style: TextStyle(fontSize: 11, color: Colors.grey[400])),
-              ]),
-            ],
-            Divider(height: 18, color: borderCol, thickness: 1),
-            _fareRow('GST (5%)', '₹${gst.toStringAsFixed(0)}', textSub: textSub),
-            if (_promoDiscount > 0)
-              _fareRow('Promo Discount', '-₹${_promoDiscount.toInt()}', positive: true, textSub: textSub),
-            if (_promoDiscount == 0 && _autoDiscount > 0)
-              _fareRow(_autoDiscountName ?? 'Auto Discount', '-₹${_autoDiscount.toInt()}', positive: true, textSub: textSub),
-            const SizedBox(height: 8),
-            // Total row — bold, large, primary blue
-            Row(children: [
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('Total Fare', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: textMain)),
-                if (minFare > 0 && isMinFareApplied)
-                  Text('Min fare applied', style: TextStyle(fontSize: 10, color: Colors.grey[400])),
-              ]),
-              const Spacer(),
-              Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                Text('₹${_finalFare.toStringAsFixed(0)}',
-                  style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w500, color: _jagoPrimary)),
-                Text('incl. GST', style: TextStyle(fontSize: 10, color: Colors.grey[400])),
-              ]),
-            ]),
-          ]),
-        ),
-      ]),
-    );
-  }
-
-  Widget _fareRow(String label, String value, {bool bold = false, bool positive = false, Color? textSub}) {
-    final sub = textSub ?? Colors.grey.shade600;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
-      child: Row(children: [
-        Expanded(child: Text(label, style: TextStyle(fontSize: 12, color: sub))),
-        Text(value, style: TextStyle(fontSize: 12,
-          fontWeight: bold ? FontWeight.w500 : FontWeight.w500,
-          color: positive ? _green : sub)),
-      ]),
+                const SizedBox(height: 2),
+                Text('Includes all taxes and fees',
+                    style: GoogleFonts.poppins(fontSize: 10, color: JT.textSecondary)),
+              ],
+            ),
+          ),
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: JT.primary.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: const Icon(Icons.receipt_long_rounded, color: JT.primary, size: 18),
+          ),
+        ],
+      ),
     );
   }
 
