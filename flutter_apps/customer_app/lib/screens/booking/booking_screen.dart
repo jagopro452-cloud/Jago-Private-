@@ -794,12 +794,16 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
       if (vcId == null || vcId.isEmpty) {
         // Selected fare is a client-side estimate (fare-estimate call failed or
         // returned no usable fares) with no real backend vehicle category —
-        // booking would always be rejected server-side. Retry the estimate
-        // instead of sending a request guaranteed to fail.
+        // booking would always be rejected server-side. Refresh the estimate
+        // instead of sending a request guaranteed to fail. Awaited (not
+        // fire-and-forget) with _loading held true throughout, so the Confirm
+        // button stays disabled during the refresh — previously it re-enabled
+        // immediately, so a user tapping Confirm again before the background
+        // refresh landed piled up one more refresh per tap.
         if (!mounted) return;
         _showSnack('Could not confirm fare for this vehicle. Refreshing fares — please try again.', error: true);
-        setState(() => _loading = false);
-        unawaited(_estimateFare());
+        await _estimateFare();
+        if (mounted) setState(() => _loading = false);
         return;
       }
       body['vehicleCategoryId'] = vcId;
