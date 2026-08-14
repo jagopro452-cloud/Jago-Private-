@@ -12172,7 +12172,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         -- the client's synthetic fallback fares. "parcel" is the one value
         -- that genuinely matches a real vc.type, so that case is preserved;
         -- everything else just needs to exclude parcel/cargo vehicles.
-        ${category === 'parcel' ? rawSql`AND vc.type = 'parcel'` : category ? rawSql`AND vc.type != 'parcel'` : rawSql``}
+        --
+        -- Also filter on vehicle_type, not just type: "Bike Delivery"
+        -- (vehicle_type='bike_parcel') has type='motor_bike' - same as plain
+        -- "Bike" - so type!='parcel' alone let it through as a bookable ride
+        -- option. A customer selecting "Bike" for a ride got matched to this
+        -- category instead, dispatch then searched for parcel-delivery
+        -- drivers, and the customer's actual (bike) driver was rejected as a
+        -- category mismatch despite being online - confirmed in production
+        -- dispatch logs. vehicle_type NOT LIKE '%parcel%' closes that gap
+        -- regardless of how "type" happens to be labeled for a given row.
+        ${category === 'parcel'
+          ? rawSql`AND vc.type = 'parcel'`
+          : category
+            ? rawSql`AND vc.type != 'parcel' AND vc.vehicle_type NOT LIKE '%parcel%'`
+            : rawSql``}
         ORDER BY f.vehicle_category_id, vc.name
       `);
       const fareRows = camelize(fareR.rows);
