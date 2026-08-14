@@ -51,6 +51,13 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
   double _walletBalance = 0;
   final TextEditingController _promoCtrl = TextEditingController();
   final VehicleStatusService _vehicleStatusService = VehicleStatusService();
+  // Created once in initState — watchVehicleStatuses() starts a fresh 3s
+  // polling stream (with an immediate fetch on subscribe) every time it's
+  // called, so wiring it straight into StreamBuilder's `stream:` inside
+  // build() would fire a brand-new request on every single rebuild of this
+  // screen, not just once. Caching it here is what actually limits this to
+  // one subscription for the screen's lifetime.
+  late final Stream<Map<String, VehicleStatus>> _vehicleStatusStream;
   String? _appliedPromo;
   double _promoDiscount = 0;
   bool _promoLoading = false;
@@ -419,6 +426,7 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
     _razorpay.on(Razorpay.EVENT_PAYMENT_SUCCESS, _handleRazorpaySuccess);
     _razorpay.on(Razorpay.EVENT_PAYMENT_ERROR, _handleRazorpayError);
     _razorpay.on(Razorpay.EVENT_EXTERNAL_WALLET, _handleExternalWallet);
+    _vehicleStatusStream = _vehicleStatusService.watchVehicleStatuses();
     _estimateFare();
     _fetchWallet();
     _fetchRoutePolyline();
@@ -1229,7 +1237,7 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
     return Scaffold(
       backgroundColor: JT.bg,
       body: StreamBuilder<Map<String, VehicleStatus>>(
-        stream: _vehicleStatusService.watchVehicleStatuses(),
+        stream: _vehicleStatusStream,
         builder: (context, snapshot) {
           final statuses = snapshot.data ?? {};
           final visibleFares = _visibleFareEntries(statuses);
