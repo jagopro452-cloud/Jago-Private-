@@ -251,7 +251,16 @@ export async function getDriverDispatchProfile(driverId: string): Promise<Driver
       dl.is_online as dl_online,
       dd.vehicle_category_id as vehicle_category_id,
       COALESCE(dd.vehicle_subcategory, '') as vehicle_subcategory,
-      COALESCE(dd.service_eligibility, '{}'::text[]) as service_eligibility,
+      -- service_eligibility is jsonb, not text[] - COALESCE(..., '{}'::text[])
+      -- against a jsonb column throws "COALESCE types jsonb and text[] cannot
+      -- be matched", which made this whole query fail on every dispatch
+      -- attempt (confirmed in production logs: candidate-query-error on
+      -- every radius step, silently falling back to a looser query that
+      -- doesn't apply this same eligibility filtering). node-postgres
+      -- already parses jsonb into a native JS array/null, and
+      -- normalizeTextArray() below treats non-array/null as [], so the
+      -- column can just be selected as-is.
+      dd.service_eligibility as service_eligibility,
       dd.parcel_eligibility,
       dd.pool_eligibility,
       dd.outstation_eligibility,
@@ -574,7 +583,16 @@ export async function findEligibleDriversForDispatch(input: {
       dl.is_online as dl_online, dl.lat, dl.lng, dl.updated_at,
       dd.vehicle_category_id as vehicle_category_id,
       COALESCE(dd.vehicle_subcategory, '') as vehicle_subcategory,
-      COALESCE(dd.service_eligibility, '{}'::text[]) as service_eligibility,
+      -- service_eligibility is jsonb, not text[] - COALESCE(..., '{}'::text[])
+      -- against a jsonb column throws "COALESCE types jsonb and text[] cannot
+      -- be matched", which made this whole query fail on every dispatch
+      -- attempt (confirmed in production logs: candidate-query-error on
+      -- every radius step, silently falling back to a looser query that
+      -- doesn't apply this same eligibility filtering). node-postgres
+      -- already parses jsonb into a native JS array/null, and
+      -- normalizeTextArray() below treats non-array/null as [], so the
+      -- column can just be selected as-is.
+      dd.service_eligibility as service_eligibility,
       dd.parcel_eligibility, dd.pool_eligibility, dd.outstation_eligibility, dd.intercity_eligibility,
       dd.seat_capacity, COALESCE(dd.approval_state, '') as approval_state,
       COALESCE(dd.city_eligibility, '{}'::text[]) as city_eligibility,
