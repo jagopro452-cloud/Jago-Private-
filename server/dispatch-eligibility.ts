@@ -86,7 +86,16 @@ function inferPlatformServiceKey(
   if (tt === "carpool" || tt === "pool" || tt === "city_pool") return "city_pool";
   if (tt === "intercity" || tt === "intercity_pool") return "intercity_pool";
   if (tt === "outstation" || tt === "outstation_pool") return "outstation_pool";
-  if (categoryServiceKey) return normalizeVehicleKey(categoryServiceKey);
+  // Vehicle-key mapping must run before the categoryServiceKey fallback, not
+  // after: vehicle_categories.service_type holds a broad label ("ride",
+  // "parcel", "pool"), not a specific platform service key, but it's
+  // truthy for every configured category. Checking it first meant this
+  // function always returned that generic "ride" (etc.) label instead of
+  // "bike_ride"/"auto_ride"/etc. - which then never matched any real
+  // platformServiceKey in checkProfileEligibility's service_eligibility
+  // check. Confirmed in production: every driver with the normal, empty
+  // service_eligibility default (relying on this inference) was rejected
+  // with "service_not_enabled" regardless of vehicle type or online status.
   const ck = normalizeVehicleKey(categoryKey);
   if (ck === "bike") return "bike_ride";
   if (ck === "auto") return "auto_ride";
@@ -94,6 +103,7 @@ function inferPlatformServiceKey(
   if (ck === "sedan") return "sedan";
   if (ck === "premium") return "premium";
   if (ck === "suv") return "suv";
+  if (categoryServiceKey) return normalizeVehicleKey(categoryServiceKey);
   return null;
 }
 
