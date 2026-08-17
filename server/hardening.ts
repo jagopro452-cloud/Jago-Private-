@@ -185,9 +185,14 @@ export async function verifyDriverAfterAccept(
         LIMIT 1
       `).catch(() => ({ rows: [] as any[] }));
       const activeTrip = activeTripCheck.rows[0] as any;
+      // A fast driver can accept, drive over (or already be at pickup), and mark
+      // arrived — or even start the ride — within this 5s verification window.
+      // Any of those statuses prove the driver is actively working the trip, not
+      // a ghost; only "accepted" would wrongly fail a driver who progressed fast.
+      const CLAIMED_STATUSES = new Set(["accepted", "arrived", "on_the_way", "in_progress"]);
       const stillClaimed =
         activeTrip &&
-        String(activeTrip.current_status || "") === "accepted" &&
+        CLAIMED_STATUSES.has(String(activeTrip.current_status || "")) &&
         String(activeTrip.current_trip_id || "") === tripId &&
         (
           (await hasActiveDriverSocket(driverId)) ||
@@ -574,7 +579,7 @@ export async function recordNoShow(
 ) {
   const config = await loadHardeningSettings();
   
-  const isDriver = reason === 'driver_not_at_location';
+  const isDriver = reason === 'driver_not_at_location' || reason === 'not_arrived';
   const penaltyAmount = isDriver 
     ? config.no_show_driver_penalty 
     : config.no_show_customer_charge;
