@@ -18792,6 +18792,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 
       res.json({ success: true, vehicle: (await readVehicleStatuses()).find((v) => v.key === vehicleKey) });
     } catch (e: any) {
+      console.error("[VEHICLE-STATUS] PATCH failed:", e);
       res.status(500).json({ message: safeErrMsg(e) });
     }
   });
