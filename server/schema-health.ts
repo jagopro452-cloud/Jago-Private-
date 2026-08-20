@@ -115,6 +115,19 @@ export async function ensureBootstrapSchema() {
   await pool.query(`
     ALTER TABLE driver_details ADD COLUMN IF NOT EXISTS car_share_enabled BOOLEAN DEFAULT false
   `).catch(logBootstrapStepError("driver_details.car_share_enabled"));
+  // Pre-existing gap: /pool/cancel writes cancel_reason/refund_amount/
+  // cancelled_at, but the original pool_ride_requests CREATE TABLE never
+  // included them — cancelling a Car Share booking was failing with
+  // "column refund_amount does not exist" before these were added.
+  await pool.query(`
+    ALTER TABLE pool_ride_requests ADD COLUMN IF NOT EXISTS cancel_reason TEXT
+  `).catch(logBootstrapStepError("pool_ride_requests.cancel_reason"));
+  await pool.query(`
+    ALTER TABLE pool_ride_requests ADD COLUMN IF NOT EXISTS refund_amount NUMERIC(12, 2) DEFAULT 0
+  `).catch(logBootstrapStepError("pool_ride_requests.refund_amount"));
+  await pool.query(`
+    ALTER TABLE pool_ride_requests ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMP
+  `).catch(logBootstrapStepError("pool_ride_requests.cancelled_at"));
   await pool.query(`
     ALTER TABLE vehicle_categories ADD COLUMN IF NOT EXISTS total_seats INTEGER DEFAULT 4
   `).catch(logBootstrapStepError("vehicle_categories.total_seats"));
