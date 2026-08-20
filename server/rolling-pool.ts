@@ -84,11 +84,16 @@ function normalizePoolKey(value: unknown): string {
 }
 
 function resolvePoolVehicleType(vc: any, seatsN: number): string {
-  const key = normalizePoolKey(vc?.vehicle_type || vc?.slug || vc?.name);
-  if (key === "pool_suv" || key.includes("suv") || key.includes("xl")) return "pool_suv";
-  if (key === "pool_premium" || key.includes("premium")) return "pool_premium";
-  if (key === "pool_sedan" || key.includes("sedan")) return "pool_sedan";
-  if (key === "pool_mini" || key.includes("mini")) return "pool_mini";
+  // Check vehicle_type AND name together, not vehicle_type-with-name-as-
+  // fallback — the admin's Vehicle Type dropdown has no "Premium" option
+  // (only Bike/Auto/Mini Car/Sedan/SUV/Carpool/etc.), so a category named
+  // "Premium" would otherwise never actually get read from its name once
+  // vehicle_type is set to anything else.
+  const key = normalizePoolKey(`${vc?.vehicle_type || vc?.slug || ""} ${vc?.name || ""}`);
+  if (key.includes("suv") || key.includes("xl")) return "pool_suv";
+  if (key.includes("premium")) return "pool_premium";
+  if (key.includes("sedan")) return "pool_sedan";
+  if (key.includes("mini")) return "pool_mini";
   return seatsN >= 6 ? "car_pool_6" : "car_pool_4";
 }
 
