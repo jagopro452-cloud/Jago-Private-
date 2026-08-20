@@ -85,7 +85,8 @@ function normalizePoolKey(value: unknown): string {
 
 function resolvePoolVehicleType(vc: any, seatsN: number): string {
   const key = normalizePoolKey(vc?.vehicle_type || vc?.slug || vc?.name);
-  if (key === "pool_suv" || key.includes("suv")) return "pool_suv";
+  if (key === "pool_suv" || key.includes("suv") || key.includes("xl")) return "pool_suv";
+  if (key === "pool_premium" || key.includes("premium")) return "pool_premium";
   if (key === "pool_sedan" || key.includes("sedan")) return "pool_sedan";
   if (key === "pool_mini" || key.includes("mini")) return "pool_mini";
   return seatsN >= 6 ? "car_pool_6" : "car_pool_4";
@@ -279,12 +280,31 @@ function detourKm(
 
 // ── Fare calc ─────────────────────────────────────────────────────────────────
 
-async function calcPoolFare(distKm: number, seats: number): Promise<{ farePerSeat: number; subtotalFare: number; totalFare: number }> {
+// Per-vehicle-type multiplier on top of the base per-seat rate, admin-editable
+// alongside the other pool settings (same business_settings key/value store,
+// same /admin/local-pool/settings endpoint) — not a separate pricing system.
+// car_pool_4 (the generic/default pool bucket) intentionally has no entry
+// here and multiplies by 1 (getPoolSettingNumber's fallback), matching the
+// existing behavior for anything that isn't Mini/Sedan/SUV.
+const POOL_TYPE_MULTIPLIER_KEYS: Record<string, string> = {
+  pool_mini: "pool_multiplier_mini",
+  pool_sedan: "pool_multiplier_sedan",
+  pool_suv: "pool_multiplier_suv",
+  pool_premium: "pool_multiplier_premium",
+};
+
+async function calcPoolFare(
+  distKm: number,
+  seats: number,
+  vehicleTypeKey?: string | null,
+): Promise<{ farePerSeat: number; subtotalFare: number; totalFare: number }> {
   const baseFare = await getPoolSettingNumber("base_fare_per_seat", 20);
   const perKmFare = await getPoolSettingNumber("fare_per_km_per_seat", 5);
   const minFare = await getPoolSettingNumber("min_fare_per_seat", 30);
   const maxFare = await getPoolSettingNumber("max_fare_per_seat", 500);
-  const rawFarePerSeat = baseFare + (perKmFare * distKm);
+  const multiplierKey = vehicleTypeKey ? POOL_TYPE_MULTIPLIER_KEYS[vehicleTypeKey] : null;
+  const multiplier = multiplierKey ? await getPoolSettingNumber(multiplierKey, 1) : 1;
+  const rawFarePerSeat = (baseFare + (perKmFare * distKm)) * multiplier;
   const clampedFarePerSeat = Math.min(Math.max(rawFarePerSeat, minFare), maxFare);
   const farePerSeat = Math.round(clampedFarePerSeat * 100) / 100;
   const subtotalFare = Math.round(farePerSeat * seats * 100) / 100;
@@ -1441,13 +1461,32 @@ export function registerRollingPoolRoutes(app: Express, authApp: any, requireAdm
           `You can book only 1 to ${maxSeatsPerBooking} seats per pool booking`,
         ));
       }
+      // Defense in depth against a stale client sending a seat count that no
+      // longer fits the selected vehicle (the /pool/estimate list already
+      // filters this, but a booking can be submitted after that list was
+      // fetched).
+      const categorySeatsR = await rawDb.execute(rawSql`
+        SELECT total_seats FROM vehicle_categories WHERE id = ${vehicleCategoryId}::uuid LIMIT 1
+      `).catch(() => ({ rows: [] as any[] }));
+      const categoryTotalSeats = parseInt((categorySeatsR.rows[0] as any)?.total_seats, 10) || 4;
+      if (requestedSeats > categoryTotalSeats) {
+        return res.status(400).json(poolResponse(
+          false,
+          "POOL_SEAT_LIMIT",
+          `This vehicle seats up to ${categoryTotalSeats} — please reduce the number of members or pick a larger vehicle`,
+        ));
+      }
       const seats = requestedSeats;
       const pLat = parseFloat(pickupLat);
       const pLng = parseFloat(pickupLng);
       const dLat = parseFloat(dropLat);
       const dLng = parseFloat(dropLng);
       const distKm = haversineKmPool(pLat, pLng, dLat, dLng);
-      const { farePerSeat, subtotalFare, totalFare } = await calcPoolFare(distKm, seats);
+      const poolVehicleTypeKey = resolvePoolVehicleType(
+        { vehicle_type: poolCategoryMeta.vehicleType, name: poolCategoryMeta.name },
+        seats,
+      );
+      const { farePerSeat, subtotalFare, totalFare } = await calcPoolFare(distKm, seats, poolVehicleTypeKey);
       let revenuePreview: any = null;
       try {
         revenuePreview = await calculateRevenueBreakdown(totalFare, "city_pool");
@@ -1529,6 +1568,70 @@ export function registerRollingPoolRoutes(app: Express, authApp: any, requireAdm
       }));
     } catch (e: any) {
       res.status(500).json(poolResponse(false, "POOL_BOOKING_FAILED", e.message || "Could not create pooled booking", {}, true));
+    }
+  });
+
+  // ─── CUSTOMER: Preview pool fare per vehicle type (no booking created) ────
+  // Powers the Car Share "choose your vehicle" screen — reuses the exact same
+  // calcPoolFare()/resolvePoolVehicleType()/isPoolVehicleCategory() logic the
+  // real booking endpoint above uses, so the quote shown here always matches
+  // what /pool/book would actually charge for the same inputs.
+  app.post("/api/app/customer/pool/estimate", authApp, async (req: any, res: any) => {
+    try {
+      const {
+        pickupLat, pickupLng, dropLat, dropLng,
+        seatsRequested = 1,
+      } = req.body;
+
+      if (!pickupLat || !pickupLng || !dropLat || !dropLng) {
+        return res.status(400).json(poolResponse(false, "POOL_COORDS_REQUIRED", "Pickup and drop coordinates required"));
+      }
+
+      const maxSeatsPerBooking = Math.max(1, Math.round(await getPoolSettingNumber("max_seats_per_booking", 2)));
+      const seats = Math.min(Math.max(parseInt(String(seatsRequested), 10) || 1, 1), maxSeatsPerBooking);
+
+      const pLat = parseFloat(pickupLat);
+      const pLng = parseFloat(pickupLng);
+      const dLat = parseFloat(dropLat);
+      const dLng = parseFloat(dropLng);
+      const distKm = haversineKmPool(pLat, pLng, dLat, dLng);
+
+      const categoriesR = await rawDb.execute(rawSql`
+        SELECT id, name, icon, vehicle_type, service_type, type, is_carpool, total_seats
+        FROM vehicle_categories
+        WHERE is_active = true
+      `);
+      // Only offer vehicle types that can actually seat the requested group —
+      // a 4-seat Mini shouldn't appear as an option for a 6-member request.
+      const poolCategories = (categoriesR.rows as any[]).filter((row) => {
+        if (!isPoolVehicleCategory(row)) return false;
+        const totalSeats = parseInt(row.total_seats, 10) || 4;
+        return totalSeats >= seats;
+      });
+
+      const options = await Promise.all(poolCategories.map(async (row) => {
+        const totalSeats = parseInt(row.total_seats, 10) || 4;
+        const vehicleTypeKey = resolvePoolVehicleType(row, totalSeats);
+        const { farePerSeat, totalFare } = await calcPoolFare(distKm, seats, vehicleTypeKey);
+        return {
+          vehicleCategoryId: String(row.id),
+          name: row.name,
+          icon: row.icon,
+          totalSeats,
+          farePerSeat,
+          totalFare,
+        };
+      }));
+      options.sort((a, b) => a.farePerSeat - b.farePerSeat);
+
+      res.json(poolResponse(
+        true,
+        "POOL_ESTIMATE_OK",
+        options.length ? "Pool vehicle options available" : "No pool vehicle types configured yet",
+        { distanceKm: distKm, seatsRequested: seats, maxSeatsPerBooking, options },
+      ));
+    } catch (e: any) {
+      res.status(500).json(poolResponse(false, "POOL_ESTIMATE_FAILED", e.message || "Could not estimate pool fare", {}, true));
     }
   });
 
@@ -2036,7 +2139,11 @@ export function registerRollingPoolRoutes(app: Express, authApp: any, requireAdm
           'base_fare_per_seat',
           'fare_per_km_per_seat',
           'min_fare_per_seat',
-          'max_fare_per_seat'
+          'max_fare_per_seat',
+          'pool_multiplier_mini',
+          'pool_multiplier_sedan',
+          'pool_multiplier_suv',
+          'pool_multiplier_premium'
         )
       `).catch(() => ({ rows: [] as any[] }));
       const settings: Record<string, string> = {};
@@ -2062,6 +2169,10 @@ export function registerRollingPoolRoutes(app: Express, authApp: any, requireAdm
         "fare_per_km_per_seat",
         "min_fare_per_seat",
         "max_fare_per_seat",
+        "pool_multiplier_mini",
+        "pool_multiplier_sedan",
+        "pool_multiplier_suv",
+        "pool_multiplier_premium",
       ]);
       const updates = Object.entries(req.body || {}).filter(([k]) => allowed.has(k));
       if (!updates.length) return res.status(400).json({ success: false, message: "No valid settings provided" });

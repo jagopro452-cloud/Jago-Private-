@@ -112,6 +112,10 @@ export default function LocalPool() {
     minFarePerSeat: "30",
     maxFarePerSeat: "500",
     maxSeatsPerBooking: "2",
+    poolMultiplierMini: "1",
+    poolMultiplierSedan: "1",
+    poolMultiplierSuv: "1",
+    poolMultiplierPremium: "1",
   });
 
   const { data: statsData } = useQuery<any>({ queryKey: ["/api/admin/local-pool/stats"] });
@@ -222,8 +226,12 @@ export default function LocalPool() {
       minFarePerSeat: String(liveSettings.min_fare_per_seat || "30"),
       maxFarePerSeat: String(liveSettings.max_fare_per_seat || "500"),
       maxSeatsPerBooking: String(liveSettings.max_seats_per_booking || "2"),
+      poolMultiplierMini: String(liveSettings.pool_multiplier_mini || "1"),
+      poolMultiplierSedan: String(liveSettings.pool_multiplier_sedan || "1"),
+      poolMultiplierSuv: String(liveSettings.pool_multiplier_suv || "1"),
+      poolMultiplierPremium: String(liveSettings.pool_multiplier_premium || "1"),
     });
-  }, [settingsOpen, liveSettings.local_pool_mode, liveSettings.local_pool_collection_secs, liveSettings.local_pool_match_radius_km, liveSettings.local_pool_max_detour_km, liveSettings.local_pool_direction_tolerance_deg, liveSettings.base_fare_per_seat, liveSettings.fare_per_km_per_seat, liveSettings.min_fare_per_seat, liveSettings.max_fare_per_seat, liveSettings.max_seats_per_booking]);
+  }, [settingsOpen, liveSettings.local_pool_mode, liveSettings.local_pool_collection_secs, liveSettings.local_pool_match_radius_km, liveSettings.local_pool_max_detour_km, liveSettings.local_pool_direction_tolerance_deg, liveSettings.base_fare_per_seat, liveSettings.fare_per_km_per_seat, liveSettings.min_fare_per_seat, liveSettings.max_fare_per_seat, liveSettings.max_seats_per_booking, liveSettings.pool_multiplier_mini, liveSettings.pool_multiplier_sedan, liveSettings.pool_multiplier_suv, liveSettings.pool_multiplier_premium]);
 
   function buildSettingsPayload() {
     return {
@@ -237,6 +245,10 @@ export default function LocalPool() {
       min_fare_per_seat: settingsForm.minFarePerSeat,
       max_fare_per_seat: settingsForm.maxFarePerSeat,
       max_seats_per_booking: settingsForm.maxSeatsPerBooking,
+      pool_multiplier_mini: settingsForm.poolMultiplierMini,
+      pool_multiplier_sedan: settingsForm.poolMultiplierSedan,
+      pool_multiplier_suv: settingsForm.poolMultiplierSuv,
+      pool_multiplier_premium: settingsForm.poolMultiplierPremium,
     };
   }
 
@@ -796,6 +808,33 @@ export default function LocalPool() {
                   <label className="form-label-jago" style={{ fontSize: 11 }}>Max Seats/Booking</label>
                   <input type="number" className="form-control" value={settingsForm.maxSeatsPerBooking} min="1" max="4" step="1"
                     onChange={e => setSettingsForm(f => ({ ...f, maxSeatsPerBooking: e.target.value }))} />
+                </div>
+              </div>
+              <hr className="my-1" />
+              <div>
+                <label className="form-label-jago fw-semibold">Per-Vehicle-Type Price Multiplier</label>
+                <div className="text-muted mb-2" style={{ fontSize: 11 }}>Multiplies the base per-seat rate above for each Car Share vehicle type — 1 means no change.</div>
+                <div className="row g-2">
+                  <div className="col-3">
+                    <label className="form-label-jago" style={{ fontSize: 11 }}>Mini</label>
+                    <input type="number" className="form-control" value={settingsForm.poolMultiplierMini} min="0.5" max="5" step="0.1"
+                      onChange={e => setSettingsForm(f => ({ ...f, poolMultiplierMini: e.target.value }))} />
+                  </div>
+                  <div className="col-3">
+                    <label className="form-label-jago" style={{ fontSize: 11 }}>Sedan</label>
+                    <input type="number" className="form-control" value={settingsForm.poolMultiplierSedan} min="0.5" max="5" step="0.1"
+                      onChange={e => setSettingsForm(f => ({ ...f, poolMultiplierSedan: e.target.value }))} />
+                  </div>
+                  <div className="col-3">
+                    <label className="form-label-jago" style={{ fontSize: 11 }}>SUV / XL</label>
+                    <input type="number" className="form-control" value={settingsForm.poolMultiplierSuv} min="0.5" max="5" step="0.1"
+                      onChange={e => setSettingsForm(f => ({ ...f, poolMultiplierSuv: e.target.value }))} />
+                  </div>
+                  <div className="col-3">
+                    <label className="form-label-jago" style={{ fontSize: 11 }}>Premium</label>
+                    <input type="number" className="form-control" value={settingsForm.poolMultiplierPremium} min="0.5" max="5" step="0.1"
+                      onChange={e => setSettingsForm(f => ({ ...f, poolMultiplierPremium: e.target.value }))} />
+                  </div>
                 </div>
               </div>
               <small className="text-muted">Fare per seat = Base + (route km x Rate/km), clamped to Min/Max. Total charged = fare per seat x seats booked.</small>
