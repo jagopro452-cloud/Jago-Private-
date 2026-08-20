@@ -8831,6 +8831,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const r = await rawDb.execute(rawSql`
         SELECT u.*,
           dd.vehicle_category_id, dd.zone_id, dd.availability_status, dd.avg_rating as driver_rating, dd.total_trips as driver_total_trips,
+          dd.car_share_enabled,
           vc.name as vehicle_category_name, vc.type as vehicle_category_type, vc.icon as vehicle_category_icon,
           z.name as zone_name,
           (SELECT COUNT(*) FROM trip_requests WHERE driver_id=u.id AND current_status='completed') as completed_trips,
@@ -8867,6 +8868,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         zoneId: d.zoneId || null,
         zone: d.zoneName || null,
         availabilityStatus: d.availabilityStatus || 'offline',
+        carShareEnabled: d.carShareEnabled === true,
         stats: {
           completedTrips: parseInt(d.completedTrips || "0"),
           totalEarned: parseFloat(d.totalEarned || "0"),
@@ -13546,7 +13548,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.patch("/api/app/driver/profile", authApp, async (req, res) => {
     try {
       const driver = (req as any).currentUser;
-      const { fullName, email, profileImage, gender, vehicleNumber, vehicleModel, vehicleCategoryId } = req.body;
+      const { fullName, email, profileImage, gender, vehicleNumber, vehicleModel, vehicleCategoryId, carShareEnabled } = req.body;
       // Update user fields
       if (fullName) await rawDb.execute(rawSql`UPDATE users SET full_name=${fullName}, updated_at=now() WHERE id=${driver.id}::uuid`);
       if (email) await rawDb.execute(rawSql`UPDATE users SET email=${email}, updated_at=now() WHERE id=${driver.id}::uuid`);
@@ -13583,6 +13585,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             `).catch(dbCatch("db"));
           }
         }
+      }
+      // Persistent "Available for Car Share?" flag on the driver's
+      // registered vehicle — independent of the vehicleCategoryId branch
+      // above so it can be toggled on its own without touching the
+      // assigned vehicle category.
+      if (typeof carShareEnabled === "boolean") {
+        await rawDb.execute(rawSql`
+          UPDATE driver_details SET car_share_enabled=${carShareEnabled} WHERE user_id=${driver.id}::uuid
+        `).catch(dbCatch("db"));
       }
       res.json({ success: true, message: "Profile updated" });
     } catch (e: any) { res.status(500).json({ message: safeErrMsg(e) }); }

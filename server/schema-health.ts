@@ -109,6 +109,12 @@ export async function ensureBootstrapSchema() {
   await pool.query(`
     ALTER TABLE driver_details ADD COLUMN IF NOT EXISTS city_eligibility TEXT[] DEFAULT '{}'::text[]
   `).catch(logBootstrapStepError("driver_details.city_eligibility"));
+  // Persistent, driver-set "Available for Car Share?" flag on their
+  // registered vehicle — separate from the per-shift Local Pool Mode
+  // toggle. A driver must enable this once before Pool Mode can be started.
+  await pool.query(`
+    ALTER TABLE driver_details ADD COLUMN IF NOT EXISTS car_share_enabled BOOLEAN DEFAULT false
+  `).catch(logBootstrapStepError("driver_details.car_share_enabled"));
   await pool.query(`
     ALTER TABLE vehicle_categories ADD COLUMN IF NOT EXISTS total_seats INTEGER DEFAULT 4
   `).catch(logBootstrapStepError("vehicle_categories.total_seats"));

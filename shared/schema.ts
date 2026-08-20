@@ -224,6 +224,7 @@ export const driverDetails = pgTable("driver_details", {
   isOnline: boolean("is_online").default(false),
   totalTrips: integer("total_trips").default(0),
   avgRating: numeric("avg_rating", { precision: 3, scale: 2 }).default("0"),
+  carShareEnabled: boolean("car_share_enabled").default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

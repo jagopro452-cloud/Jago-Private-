@@ -31,6 +31,10 @@ import { recomputeUserRating } from "./ratings";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
+// Hard business rule: one Car Share booking can request at most 2 seats,
+// regardless of the matched vehicle's total capacity or any admin setting.
+// Not admin-configurable on purpose — validated on both client and server.
+const MAX_SEATS_PER_CAR_SHARE_BOOKING = 2;
 const MAX_DETOUR_KM = 2.5;        // max extra km to pick up a new passenger
 const MAX_MATCH_RADIUS_KM = 4;    // search for sessions within this radius
 const DIRECTION_TOLERANCE_DEG = 50; // bearing must match within ±50°
@@ -528,21 +532,39 @@ async function matchRequest(requestId: string): Promise<boolean> {
 
   // Atomically assign request to session and decrement available_seats
   let assignedPickupOrder = 1;
+  let matchedFarePerSeat: number | null = null;
+  let matchedTotalFare: number | null = null;
   const txClient = await dbPool.connect();
   try {
     await txClient.query("BEGIN");
 
     // Re-check session still has seats (FOR UPDATE prevents race)
     const lockR = await txClient.query(
-      `SELECT available_seats FROM driver_pool_sessions
-       WHERE id = $1 AND status = 'active' AND accepting_new_requests = true AND available_seats >= $2
-       FOR UPDATE`,
+      `SELECT dps.available_seats, dps.vehicle_category_id, vc.name, vc.vehicle_type, vc.total_seats
+       FROM driver_pool_sessions dps
+       LEFT JOIN vehicle_categories vc ON vc.id = dps.vehicle_category_id
+       WHERE dps.id = $1 AND dps.status = 'active' AND dps.accepting_new_requests = true AND dps.available_seats >= $2
+       FOR UPDATE OF dps`,
       [match.sessionId, parseInt(req.seats_requested)],
     );
     if (!lockR.rows.length) {
       await txClient.query("ROLLBACK");
       return false;
     }
+    const matchedVehicleRow = lockR.rows[0] as any;
+
+    // The customer didn't choose a vehicle type — now that a specific
+    // vehicle is actually matched, recalculate the real fare using its
+    // pricing (base rate + that vehicle's admin-configured multiplier)
+    // instead of the generic estimate stored at booking time. This is the
+    // fare the customer and driver both see from here on.
+    const matchedTypeKey = resolvePoolVehicleType(
+      { vehicle_type: matchedVehicleRow.vehicle_type, name: matchedVehicleRow.name },
+      parseInt(matchedVehicleRow.total_seats, 10) || 4,
+    );
+    const recalculated = await calcPoolFare(parseFloat(req.distance_km) || 0, parseInt(req.seats_requested), matchedTypeKey);
+    matchedFarePerSeat = recalculated.farePerSeat;
+    matchedTotalFare = recalculated.totalFare;
 
     // Assign
     const pickupOrderR = await txClient.query(
@@ -553,15 +575,25 @@ async function matchRequest(requestId: string): Promise<boolean> {
     assignedPickupOrder = pickupOrderR.rows[0].next;
     const pickupOrder = assignedPickupOrder;
     const dropOrder = assignedPickupOrder;
-    await txClient.query(
+    // The status guard here is the fix for the cancel race condition: if the
+    // customer cancelled (status flipped to 'cancelled') between our initial
+    // SELECT above and this UPDATE, rowCount is 0 and we roll back instead
+    // of silently overwriting their cancellation back to pending_driver_accept.
+    const assignR = await txClient.query(
       `UPDATE pool_ride_requests
        SET proposed_session_id = $1, status = 'pending_driver_accept',
            pickup_order = $2, drop_order = $3,
+           vehicle_category_id = COALESCE(vehicle_category_id, $5),
+           fare_per_seat = $6, total_fare = $7,
            seat_lock_expires_at = NOW() + INTERVAL '45 seconds',
            updated_at = NOW()
-       WHERE id = $4`,
-      [match.sessionId, pickupOrder, dropOrder, requestId],
+       WHERE id = $4 AND status = 'searching'`,
+      [match.sessionId, pickupOrder, dropOrder, requestId, matchedVehicleRow.vehicle_category_id, matchedFarePerSeat, matchedTotalFare],
     );
+    if (assignR.rowCount === 0) {
+      await txClient.query("ROLLBACK");
+      return false;
+    }
     await txClient.query(
       `UPDATE driver_pool_sessions
        SET available_seats = available_seats - $1,
@@ -604,7 +636,7 @@ async function matchRequest(requestId: string): Promise<boolean> {
     pickupAddress: req.pickup_address,
     dropAddress: req.drop_address,
     seatsRequested: parseInt(req.seats_requested),
-    totalFare: parseFloat(req.total_fare),
+    totalFare: parseFloat(updReq.total_fare),
     pickupOrder: assignedPickupOrder,
     expiresInSeconds: DRIVER_ACCEPT_TIMEOUT_SEC,
     requiresDriverAccept: true,
@@ -635,6 +667,11 @@ async function matchRequest(requestId: string): Promise<boolean> {
     },
     seatLockExpiresAt: new Date(Date.now() + DRIVER_ACCEPT_TIMEOUT_SEC * 1000).toISOString(),
     pendingDriverAccept: true,
+    // The real, vehicle-specific fare — may differ from the estimate shown
+    // while searching, now that a specific vehicle has actually been matched.
+    farePerSeat: parseFloat(updReq.fare_per_seat),
+    totalFare: parseFloat(updReq.total_fare),
+    seatsRequested: parseInt(updReq.seats_requested),
     message: "Compatible pool vehicle found. Waiting for driver confirmation.",
   });
 
@@ -745,7 +782,7 @@ export function registerRollingPoolRoutes(app: Express, authApp: any, requireAdm
       const driver = req.currentUser;
       const { vehicleCategoryId, maxSeats = 4 } = req.body;
       const driverCategoryR = await rawDb.execute(rawSql`
-        SELECT vehicle_category_id
+        SELECT vehicle_category_id, car_share_enabled
         FROM driver_details
         WHERE user_id = ${driver.id}::uuid
         LIMIT 1
@@ -758,6 +795,18 @@ export function registerRollingPoolRoutes(app: Express, authApp: any, requireAdm
 
       if (!resolvedVehicleCategoryId) {
         return res.status(403).json(poolResponse(false, "POOL_DRIVER_NOT_ELIGIBLE", "Driver has no pool-enabled vehicle category assigned"));
+      }
+      // Persistent, driver-set opt-in — separate from (and required before)
+      // starting a live pool session. A driver whose vehicle isn't marked
+      // Car Share-available can't start pool mode even if their assigned
+      // vehicle_category itself is pool-eligible.
+      const driverCarShareEnabled = (driverCategoryR.rows[0] as any)?.car_share_enabled === true;
+      if (!driverCarShareEnabled) {
+        return res.status(403).json(poolResponse(
+          false,
+          "POOL_NOT_ENABLED_FOR_VEHICLE",
+          "Enable \"Available for Car Share\" for your vehicle before starting pool mode",
+        ));
       }
       if (requestedVehicleCategoryId && driverVehicleCategoryId && requestedVehicleCategoryId !== driverVehicleCategoryId) {
         return res.status(403).json(poolResponse(false, "POOL_DRIVER_CATEGORY_MISMATCH", "Requested pool vehicle category does not match driver's approved vehicle"));
@@ -1436,17 +1485,20 @@ export function registerRollingPoolRoutes(app: Express, authApp: any, requireAdm
       if (!pickupLat || !pickupLng || !dropLat || !dropLng) {
         return res.status(400).json(poolResponse(false, "POOL_COORDS_REQUIRED", "Pickup and drop coordinates required"));
       }
-      if (!vehicleCategoryId) {
-        return res.status(400).json(poolResponse(false, "POOL_VEHICLE_REQUIRED", "Please select a pool vehicle type before booking"));
-      }
-      const poolCategoryMeta = await getVehicleCategoryMeta(String(vehicleCategoryId));
-      if (!poolCategoryMeta || !isPoolVehicleCategory({
-        vehicle_type: poolCategoryMeta.vehicleType,
-        service_type: poolCategoryMeta.serviceType,
-        is_carpool: poolCategoryMeta.isCarpool,
-        name: poolCategoryMeta.name,
-      })) {
-        return res.status(400).json(poolResponse(false, "POOL_VEHICLE_INVALID", "Selected vehicle is not a valid pool category"));
+      // The customer does not choose a vehicle type for Car Share — JAGO
+      // auto-matches across every eligible pool vehicle. vehicleCategoryId
+      // stays accepted (not required) for any caller that still sends one;
+      // when present it's validated, but omitting it is the normal path now.
+      if (vehicleCategoryId) {
+        const poolCategoryMeta = await getVehicleCategoryMeta(String(vehicleCategoryId));
+        if (!poolCategoryMeta || !isPoolVehicleCategory({
+          vehicle_type: poolCategoryMeta.vehicleType,
+          service_type: poolCategoryMeta.serviceType,
+          is_carpool: poolCategoryMeta.isCarpool,
+          name: poolCategoryMeta.name,
+        })) {
+          return res.status(400).json(poolResponse(false, "POOL_VEHICLE_INVALID", "Selected vehicle is not a valid pool category"));
+        }
       }
 
       const modeR = await rawDb.execute(rawSql`
@@ -1458,27 +1510,11 @@ export function registerRollingPoolRoutes(app: Express, authApp: any, requireAdm
       }
 
       const requestedSeats = parseInt(String(seatsRequested), 10) || 1;
-      const maxSeatsPerBooking = Math.max(1, Math.round(await getPoolSettingNumber("max_seats_per_booking", 2)));
-      if (requestedSeats < 1 || requestedSeats > maxSeatsPerBooking) {
+      if (requestedSeats < 1 || requestedSeats > MAX_SEATS_PER_CAR_SHARE_BOOKING) {
         return res.status(400).json(poolResponse(
           false,
           "POOL_SEAT_LIMIT",
-          `You can book only 1 to ${maxSeatsPerBooking} seats per pool booking`,
-        ));
-      }
-      // Defense in depth against a stale client sending a seat count that no
-      // longer fits the selected vehicle (the /pool/estimate list already
-      // filters this, but a booking can be submitted after that list was
-      // fetched).
-      const categorySeatsR = await rawDb.execute(rawSql`
-        SELECT total_seats FROM vehicle_categories WHERE id = ${vehicleCategoryId}::uuid LIMIT 1
-      `).catch(() => ({ rows: [] as any[] }));
-      const categoryTotalSeats = parseInt((categorySeatsR.rows[0] as any)?.total_seats, 10) || 4;
-      if (requestedSeats > categoryTotalSeats) {
-        return res.status(400).json(poolResponse(
-          false,
-          "POOL_SEAT_LIMIT",
-          `This vehicle seats up to ${categoryTotalSeats} — please reduce the number of members or pick a larger vehicle`,
+          `You can request only 1 to ${MAX_SEATS_PER_CAR_SHARE_BOOKING} seats per Car Share booking`,
         ));
       }
       const seats = requestedSeats;
@@ -1487,11 +1523,13 @@ export function registerRollingPoolRoutes(app: Express, authApp: any, requireAdm
       const dLat = parseFloat(dropLat);
       const dLng = parseFloat(dropLng);
       const distKm = haversineKmPool(pLat, pLng, dLat, dLng);
-      const poolVehicleTypeKey = resolvePoolVehicleType(
-        { vehicle_type: poolCategoryMeta.vehicleType, name: poolCategoryMeta.name },
-        seats,
-      );
-      const { farePerSeat, subtotalFare, totalFare } = await calcPoolFare(distKm, seats, poolVehicleTypeKey);
+      // The actual vehicle isn't known yet — matching happens after this
+      // request is created. This is an initial estimate at the base (no
+      // per-type multiplier) rate; matchRequest() recalculates the real
+      // fare once a specific vehicle is matched and updates this row before
+      // notifying the customer, so what they're ultimately charged reflects
+      // the matched vehicle's actual pricing, not this placeholder.
+      const { farePerSeat, subtotalFare, totalFare } = await calcPoolFare(distKm, seats, null);
       let revenuePreview: any = null;
       try {
         revenuePreview = await calculateRevenueBreakdown(totalFare, "city_pool");
@@ -1576,11 +1614,13 @@ export function registerRollingPoolRoutes(app: Express, authApp: any, requireAdm
     }
   });
 
-  // ─── CUSTOMER: Preview pool fare per vehicle type (no booking created) ────
-  // Powers the Car Share "choose your vehicle" screen — reuses the exact same
-  // calcPoolFare()/resolvePoolVehicleType()/isPoolVehicleCategory() logic the
-  // real booking endpoint above uses, so the quote shown here always matches
-  // what /pool/book would actually charge for the same inputs.
+  // ─── CUSTOMER: Preview an estimated Car Share fare (no booking created) ───
+  // The customer never picks a vehicle type, so this returns one estimate —
+  // the base per-seat rate, not tied to any specific vehicle_category — for
+  // display before booking. Reuses calcPoolFare(), the same function
+  // /pool/book and matchRequest() use, so it's not a duplicate pricing path.
+  // The real, vehicle-specific fare is only known once matchRequest() finds
+  // an actual driver and recalculates using that vehicle's pricing.
   app.post("/api/app/customer/pool/estimate", authApp, async (req: any, res: any) => {
     try {
       const {
@@ -1592,8 +1632,7 @@ export function registerRollingPoolRoutes(app: Express, authApp: any, requireAdm
         return res.status(400).json(poolResponse(false, "POOL_COORDS_REQUIRED", "Pickup and drop coordinates required"));
       }
 
-      const maxSeatsPerBooking = Math.max(1, Math.round(await getPoolSettingNumber("max_seats_per_booking", 2)));
-      const seats = Math.min(Math.max(parseInt(String(seatsRequested), 10) || 1, 1), maxSeatsPerBooking);
+      const seats = Math.min(Math.max(parseInt(String(seatsRequested), 10) || 1, 1), MAX_SEATS_PER_CAR_SHARE_BOOKING);
 
       const pLat = parseFloat(pickupLat);
       const pLng = parseFloat(pickupLng);
@@ -1601,39 +1640,30 @@ export function registerRollingPoolRoutes(app: Express, authApp: any, requireAdm
       const dLng = parseFloat(dropLng);
       const distKm = haversineKmPool(pLat, pLng, dLat, dLng);
 
-      const categoriesR = await rawDb.execute(rawSql`
-        SELECT id, name, icon, vehicle_type, service_type, type, is_carpool, total_seats
+      const anyPoolCategoryR = await rawDb.execute(rawSql`
+        SELECT id, name, vehicle_type, service_type, type, is_carpool, total_seats
         FROM vehicle_categories
         WHERE is_active = true
       `);
-      // Only offer vehicle types that can actually seat the requested group —
-      // a 4-seat Mini shouldn't appear as an option for a 6-member request.
-      const poolCategories = (categoriesR.rows as any[]).filter((row) => {
+      const hasEligibleVehicle = (anyPoolCategoryR.rows as any[]).some((row) => {
         if (!isPoolVehicleCategory(row)) return false;
-        const totalSeats = parseInt(row.total_seats, 10) || 4;
-        return totalSeats >= seats;
+        return (parseInt(row.total_seats, 10) || 4) >= seats;
       });
 
-      const options = await Promise.all(poolCategories.map(async (row) => {
-        const totalSeats = parseInt(row.total_seats, 10) || 4;
-        const vehicleTypeKey = resolvePoolVehicleType(row, totalSeats);
-        const { farePerSeat, totalFare } = await calcPoolFare(distKm, seats, vehicleTypeKey);
-        return {
-          vehicleCategoryId: String(row.id),
-          name: row.name,
-          icon: row.icon,
-          totalSeats,
-          farePerSeat,
-          totalFare,
-        };
-      }));
-      options.sort((a, b) => a.farePerSeat - b.farePerSeat);
+      const { farePerSeat, totalFare } = await calcPoolFare(distKm, seats, null);
 
       res.json(poolResponse(
         true,
         "POOL_ESTIMATE_OK",
-        options.length ? "Pool vehicle options available" : "No pool vehicle types configured yet",
-        { distanceKm: distKm, seatsRequested: seats, maxSeatsPerBooking, options },
+        hasEligibleVehicle ? "Car Share estimate available" : "No Car Share vehicles configured yet",
+        {
+          distanceKm: distKm,
+          seatsRequested: seats,
+          maxSeatsPerBooking: MAX_SEATS_PER_CAR_SHARE_BOOKING,
+          hasEligibleVehicle,
+          farePerSeat,
+          totalFare,
+        },
       ));
     } catch (e: any) {
       res.status(500).json(poolResponse(false, "POOL_ESTIMATE_FAILED", e.message || "Could not estimate pool fare", {}, true));
