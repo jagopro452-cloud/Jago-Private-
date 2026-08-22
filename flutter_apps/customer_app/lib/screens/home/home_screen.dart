@@ -20,7 +20,7 @@ import '../booking/premium_location_screen.dart';
 import '../../services/trip_service.dart';
 import '../auth/login_screen.dart';
 import '../outstation_pool/outstation_pool_screen.dart';
-import '../car_sharing/car_sharing_screen.dart';
+import '../car_share/car_share_options_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -37,6 +37,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _locationReady = false;
   List<Map<String, dynamic>> _vehicleCategories = [];
   List<Map<String, dynamic>> _activeServices = [];
+  // TEMP diagnostic: which request last wrote _activeServices, and with what
+  // coordinates/keys — visible on-screen so this can be read off an
+  // installed release build without ADB/logcat access. Remove once the
+  // Cab/Premium visibility issue is confirmed fixed.
+  int _activeServicesRequestSeq = 0;
+  String _activeServicesDebugLine = '';
   List<dynamic> _savedPlaces = [];
   List<Map<String, dynamic>> _recentTrips = [];
   Map<String, dynamic>? _activeTrip;
@@ -1010,6 +1016,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _fetchActiveServices() async {
+    // _fetchActiveServices() fires more than once per screen load (immediately
+    // in initState with no location yet, again once a cached last-known
+    // position lands, and again once an accurate GPS fix lands) and these
+    // calls are not awaited relative to each other. Without a sequence guard,
+    // an earlier call that happens to resolve *after* a later, more accurate
+    // one can silently overwrite it with stale/no-location data — only the
+    // most recently *issued* request is allowed to update state.
+    final requestId = ++_activeServicesRequestSeq;
+    final usedLat = _locationReady ? _pickupLat : null;
+    final usedLng = _locationReady ? _pickupLng : null;
     try {
       final headers = await AuthService.getHeaders();
       // Use location-based endpoint for city-filtered services
@@ -1024,8 +1040,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final services = (data['services'] as List<dynamic>?)
                 ?.cast<Map<String, dynamic>>() ??
             [];
+        final keys = services.map((s) => s['key']?.toString() ?? '?').toList();
+        debugPrint('ACTIVE SERVICES FROM SERVER (req#$requestId, lat=$usedLat, lng=$usedLng, '
+            'inZone=${data['inZone']}, zone=${data['zoneName']}): $keys');
+        if (requestId != _activeServicesRequestSeq) {
+          debugPrint('ACTIVE SERVICES req#$requestId superseded by req#$_activeServicesRequestSeq — discarding');
+          return;
+        }
         setState(() {
           _activeServices = services;
+          _activeServicesDebugLine =
+              'req#$requestId lat=$usedLat lng=$usedLng zone=${data['zoneName'] ?? '-'} keys=${keys.join(',')}';
           // The location-filtered endpoint returns [] with no lat/lng, so
           // only a location-aware attempt actually settles the "still
           // finding services" state — an empty unfiltered response isn't
@@ -1033,7 +1058,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           if (_locationReady) _servicesLoading = false;
         });
       }
-    } catch (_) {
+    } catch (e) {
+      debugPrint('ACTIVE SERVICES req#$requestId primary endpoint failed ($e) — falling back');
       // Fallback to non-location endpoint
       try {
         final headers = await AuthService.getHeaders();
@@ -1044,8 +1070,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           final services = (data['services'] as List<dynamic>?)
                   ?.cast<Map<String, dynamic>>() ??
               [];
+          final keys = services.map((s) => s['key']?.toString() ?? '?').toList();
+          debugPrint('ACTIVE SERVICES FROM SERVER (req#$requestId, fallback endpoint): $keys');
+          if (requestId != _activeServicesRequestSeq) {
+            debugPrint('ACTIVE SERVICES req#$requestId (fallback) superseded by req#$_activeServicesRequestSeq — discarding');
+            return;
+          }
           setState(() {
             _activeServices = services;
+            _activeServicesDebugLine = 'req#$requestId (fallback) keys=${keys.join(',')}';
             _servicesLoading = false;
           });
         }
@@ -1084,7 +1117,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     const isDark = false;
     final screenWidth = MediaQuery.of(context).size.width;
-    final gridRatio = screenWidth < 380 ? 2.1 : (screenWidth > 600 ? 3.0 : 2.3);
+    final gridRatio = screenWidth < 380 ? 2.5 : (screenWidth > 600 ? 3.4 : 2.7);
     final textScale = screenWidth < 380 ? 0.9 : 1.0;
 
     return Scaffold(
@@ -1370,8 +1403,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ),
                 ),
 
+                // TEMP diagnostic readout — shows exactly what the active-services
+                // API returned so the Cab/Premium visibility issue can be
+                // diagnosed on an installed release build without ADB. Remove
+                // once resolved.
+                if (_activeServicesDebugLine.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+                    child: Text(
+                      _activeServicesDebugLine,
+                      style: const TextStyle(fontSize: 10, color: Color(0xFFEF4444)),
+                    ),
+                  ),
+
                 const SizedBox(height: 12),
-                
+
                 // Our Services Grid
                 GridView.count(
                   shrinkWrap: true,
@@ -1379,8 +1425,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
                   crossAxisCount: 2,
                   childAspectRatio: gridRatio, // Responsive ratio based on screen width
-                  crossAxisSpacing: 12,
-                  mainAxisSpacing: 12,
+                  crossAxisSpacing: 10,
+                  mainAxisSpacing: 10,
                   children: _buildHomeServiceGridChildren(textScale, screenWidth),
                     ),
                   // Removed Extra ) for Expanded
@@ -1438,16 +1484,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     required String vehicleKey,
     String? imageUrl,
     required VoidCallback onTap,
-    double labelFontSize = 18,
-    double artworkWidth = 105,
-    double artworkRight = -12,
+    double labelFontSize = 14,
+    double artworkWidth = 76,
+    double artworkRight = -6,
   }) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
         decoration: BoxDecoration(
           color: JT.surface,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(14),
           border: Border.all(color: JT.border, width: 1),
           boxShadow: JT.cardShadow,
         ),
@@ -1455,7 +1501,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           clipBehavior: Clip.none,
           children: [
             Positioned(
-              left: 16,
+              left: 14,
               top: 0,
               bottom: 0,
               child: FittedBox(
@@ -1472,8 +1518,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
             Positioned(
               right: artworkRight,
-              top: -12,
-              bottom: -12,
+              top: -6,
+              bottom: -6,
               child: imageUrl != null
                   ? CachedNetworkImage(
                       imageUrl: imageUrl,
@@ -1496,7 +1542,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       child: Container(
         decoration: BoxDecoration(
           color: JT.surface,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(14),
           border: Border.all(color: JT.border, width: 1),
           boxShadow: JT.cardShadow,
         ),
@@ -1504,7 +1550,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           clipBehavior: Clip.none,
           children: [
             Positioned(
-              left: 16,
+              left: 14,
               top: 0,
               bottom: 0,
               child: Center(
@@ -1514,7 +1560,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     'View All',
                     style: GoogleFonts.poppins(
                       color: const Color(0xFF1E293B),
-                      fontSize: 18 * textScale,
+                      fontSize: 14 * textScale,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
@@ -1522,11 +1568,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
             ),
             Positioned(
-              right: 12,
+              right: 10,
               top: 0,
               bottom: 0,
               child: Icon(Icons.arrow_forward_rounded,
-                  color: const Color(0xFF2C95F1), size: 32),
+                  color: const Color(0xFF2C95F1), size: 24),
             ),
           ],
         ),
@@ -1546,7 +1592,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         label: 'Bike',
         vehicleKey: 'bike',
         imageUrl: 'https://res.cloudinary.com/kits/image/upload/e_make_transparent:15/q_auto/f_png/v1775123974/bike_logo_g7idrq.png',
-        labelFontSize: 18 * textScale,
+        labelFontSize: 14 * textScale,
         onTap: () => Navigator.push(
           context,
           MaterialPageRoute(
@@ -1567,7 +1613,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         label: 'Auto',
         vehicleKey: 'auto',
         imageUrl: 'https://res.cloudinary.com/kits/image/upload/q_auto/f_auto/v1775125550/ChatGPT_Image_Apr_2_2026_03_55_30_PM_ywb7fj.png',
-        labelFontSize: 18 * textScale,
+        labelFontSize: 14 * textScale,
         onTap: () => Navigator.push(
           context,
           MaterialPageRoute(
@@ -1588,7 +1634,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         label: 'Cab',
         vehicleKey: 'cab',
         imageUrl: 'https://res.cloudinary.com/dg5ct7fys/image/upload/f_auto,q_auto/ChatGPT_Image_Apr_17_2026_11_27_28_AM_w0rcnh',
-        labelFontSize: 18 * textScale,
+        labelFontSize: 14 * textScale,
         onTap: () => Navigator.push(
           context,
           MaterialPageRoute(
@@ -1609,9 +1655,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         label: 'Premium',
         vehicleKey: 'premium',
         imageUrl: 'https://res.cloudinary.com/dg5ct7fys/image/upload/f_auto,q_auto/ChatGPT_Image_Apr_17_2026_11_31_05_AM_kavp5e',
-        labelFontSize: 15 * textScale,
-        artworkWidth: 100,
-        artworkRight: -15,
+        labelFontSize: 12 * textScale,
+        artworkWidth: 72,
+        artworkRight: -8,
         onTap: () => Navigator.push(
           context,
           MaterialPageRoute(
@@ -1632,7 +1678,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         label: 'Parcel',
         vehicleKey: 'parcel_bike',
         imageUrl: 'https://res.cloudinary.com/kits/image/upload/q_auto/f_auto/v1775367404/be5b86c2-7a8a-4dbd-ad33-e8da2b627d5e_vurdrg.png',
-        labelFontSize: 18 * textScale,
+        labelFontSize: 14 * textScale,
         onTap: () => Navigator.push(
           context,
           MaterialPageRoute(
@@ -1651,10 +1697,36 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         label: 'Car Share',
         vehicleKey: 'car_share',
         imageUrl: 'https://res.cloudinary.com/kits/image/upload/v1784527865/car_sharing_vo8nrz.png',
-        labelFontSize: 16 * textScale,
+        labelFontSize: 12 * textScale,
+        // Real seat-sharing: reuses the same pickup/drop picker as every
+        // other tile, then hands off to the Rolling Pool booking flow
+        // (member count -> vehicle type -> live per-seat price -> confirm)
+        // instead of a private single-vehicle booking.
         onTap: () => Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => const CarSharingScreen()),
+          MaterialPageRoute(
+            builder: (_) => PremiumLocationScreen(
+              serviceType: 'ride',
+              pickupAddress: _pickup.isNotEmpty ? _pickup : null,
+              pickupLat: _pickupLat,
+              pickupLng: _pickupLng,
+              onLocationsConfirmed: (pickupAddress, pickupLat, pickupLng, dropAddress, dropLat, dropLng) {
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => CarShareOptionsScreen(
+                      pickupAddress: pickupAddress,
+                      pickupLat: pickupLat,
+                      pickupLng: pickupLng,
+                      dropAddress: dropAddress,
+                      dropLat: dropLat,
+                      dropLng: dropLng,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
         ),
       ));
     }
@@ -1664,7 +1736,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         label: 'Outstation',
         vehicleKey: 'outstation',
         imageUrl: 'https://res.cloudinary.com/kits/image/upload/v1784528307/outstation_pool_qh48ii.png',
-        labelFontSize: 16 * textScale,
+        labelFontSize: 12 * textScale,
         onTap: () => Navigator.push(
           context,
           MaterialPageRoute(builder: (_) => const OutstationPoolScreen()),

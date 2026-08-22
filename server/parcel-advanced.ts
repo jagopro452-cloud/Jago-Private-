@@ -21,7 +21,7 @@ import { notifyUser } from "./notification-service";
 // Removed legacy SMS notification logic. Only FCM and socket notifications are supported.
 import { io } from "./socket";
 import { activeDriverEligibilitySql } from "./driver-state";
-import { uuidArraySql } from "./vehicle-matching";
+import { uuidArraySql, normalizeBookingVehicleType } from "./vehicle-matching";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -484,13 +484,20 @@ export function emitParcelLifecycle(
 // ── Vehicle Type Matching for Dispatch (Porter-grade strict) ─────────────────
 
 /**
- * Strict 1:1 mapping from parcel vehicle_key (sent by app) to canonical
- * driver vehicle_categories.name / slug. NO fuzzy fallback — a parcel key
- * with no mapping is rejected outright.
+ * Mapping from parcel vehicle_key (sent by app) to canonical driver
+ * vehicle_categories.name / slug. NO fuzzy fallback — a parcel key with no
+ * mapping is rejected outright.
+ *
+ * bike_parcel/auto_parcel also accept the plain ride categories ("bike",
+ * "auto") — a driver's own two-wheeler/three-wheeler physically doubles as
+ * a delivery vehicle for small/medium parcels, so ride-only drivers are
+ * parcel-eligible for these two without needing separate onboarding. The
+ * cargo-only categories (Tata Ace, Bolero, Tempo 407) stay strict — no
+ * passenger ride category uses that vehicle class.
  */
 const PARCEL_VEHICLE_DRIVER_MAP: Record<string, string[]> = {
-  bike_parcel:   ["bike_parcel", "bike parcel", "parcel_bike", "bike_delivery", "bike delivery"],
-  auto_parcel:   ["auto_parcel", "auto parcel", "parcel_auto", "auto_delivery", "auto delivery", "mini_cargo_auto"],
+  bike_parcel:   ["bike_parcel", "bike parcel", "parcel_bike", "bike_delivery", "bike delivery", "bike"],
+  auto_parcel:   ["auto_parcel", "auto parcel", "parcel_auto", "auto_delivery", "auto delivery", "mini_cargo_auto", "auto"],
   tata_ace:      ["tata_ace", "tata ace"],
   pickup_truck:  ["pickup_truck", "pickup truck"],
   bolero_cargo:  ["bolero_cargo", "bolero pickup", "bolero cargo"],
@@ -520,7 +527,32 @@ async function resolveAllowedCategoryIds(parcelKey: string): Promise<string[]> {
        OR LOWER(COALESCE(vehicle_type, '')) LIKE ANY(${ilikePatterns})
   `).catch(() => ({ rows: [] as any[] }));
 
-  const ids = (r.rows as any[]).map((row) => String(row.id));
+  const idSet = new Set<string>((r.rows as any[]).map((row) => String(row.id)));
+
+  // Bike Parcel is a service Bike Taxi riders also perform — the business
+  // rule is bike_parcel → bike, not a separate rider vehicle type. The name/
+  // vehicle_type match above only recognizes categories whose name literally
+  // contains "bike", but ride dispatch (getMatchingDriverCategoryIds) accepts
+  // a much wider set of bike synonyms via normalizeBookingVehicleType
+  // (motor_bike, motorbike, motorcycle, two_wheeler, two_wheel, bike_ride,
+  // etc.) — see vehicle-matching.ts. If a driver's registered category uses
+  // one of those synonyms instead of literally "bike", Bike Taxi dispatch
+  // would find them but this function wouldn't, silently excluding otherwise
+  // eligible Bike Taxi riders from Bike Parcel alerts. Reusing the same
+  // normalizer here (instead of maintaining a second, narrower bike-name
+  // list) keeps the two dispatch paths' idea of "what counts as a bike"
+  // permanently in sync.
+  if (parcelKey === "bike_parcel") {
+    const allCategories = await rawDb.execute(rawSql`
+      SELECT id, name, vehicle_type FROM vehicle_categories WHERE is_active = true
+    `).catch(() => ({ rows: [] as any[] }));
+    for (const row of allCategories.rows as any[]) {
+      const canonical = normalizeBookingVehicleType(row.vehicle_type || row.name);
+      if (canonical === "bike") idSet.add(String(row.id));
+    }
+  }
+
+  const ids = Array.from(idSet);
   VC_ID_CACHE.set(parcelKey, { ids, expiresAt: Date.now() + VC_CACHE_TTL_MS });
   return ids;
 }
@@ -651,7 +683,7 @@ export async function findParcelCapableDriversDetailed(
         if (row.is_locked) reasons.push("locked");
         if (!row.dl_online) reasons.push("offline");
         if (row.current_trip_id) reasons.push("busy");
-        if (row.verification_status !== "approved") reasons.push("not_active");
+        if (!["approved", "verified"].includes(row.verification_status)) reasons.push("not_active");
         if (Number(row.lat) === 0 && Number(row.lng) === 0) reasons.push("gps_invalid");
         const mins = row.updated_at
           ? (Date.now() - new Date(row.updated_at).getTime()) / 1000

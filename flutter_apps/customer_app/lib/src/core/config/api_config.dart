@@ -140,6 +140,7 @@ class ApiConfig {
   static String outstationPoolCancel(String bookingId) => '$baseUrl/api/app/customer/outstation-pool/v2/bookings/$bookingId/cancel';
   static String outstationPoolCoPassengers(String bookingId) => '$baseUrl/api/app/customer/outstation-pool/v2/bookings/$bookingId/co-passengers';
   static String outstationPoolRateDriver(String bookingId) => '$baseUrl/api/app/customer/outstation-pool/v2/bookings/$bookingId/rate-driver';
+  static String get localPoolEstimate => '$baseUrl/api/app/customer/pool/estimate';
   static String get localPoolBook => '$baseUrl/api/app/customer/pool/book';
   static String localPoolStatus(String requestId) => '$baseUrl/api/app/customer/pool/status/$requestId';
   static String localPoolCancel(String requestId) => '$baseUrl/api/app/customer/pool/cancel/$requestId';

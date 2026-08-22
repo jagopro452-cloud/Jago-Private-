@@ -5,6 +5,7 @@ import '../../core/map_night_style.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
+import 'package:jago_shared_core/jago_shared_core.dart';
 import '../../src/core/config/api_config.dart';
 import '../../config/jago_theme.dart';
 import '../../services/auth_service.dart';
@@ -29,9 +30,16 @@ class LocalPoolStatusScreen extends StatefulWidget {
   State<LocalPoolStatusScreen> createState() => _LocalPoolStatusScreenState();
 }
 
-class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen> {
+class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
+    with SingleTickerProviderStateMixin {
   final SocketService _socket = SocketService();
   Timer? _poller;
+  // Searching-screen animation, matching the Bike/Auto tracking screen's
+  // "Finding you the best ride" pulse + 3-step tracker so Car Share's first
+  // moments feel like the same product, not a different flow bolted on.
+  late final AnimationController _pulseCtrl;
+  Timer? _searchStageTimer;
+  int _searchStage = 0; // cycles 0..2: Searching -> Verifying -> Matching
   StreamSubscription<Map<String, dynamic>>? _poolStatusSub;
   StreamSubscription<Map<String, dynamic>>? _seatSub;
   StreamSubscription<Map<String, dynamic>>? _callIncomingSub;
@@ -77,17 +85,81 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen> {
   Map<String, dynamic>? _seatState;
   String _status = 'searching';
   LatLng? _driverLatLng;
+  Set<Marker> _liveMapMarkers = {};
+
+  // The matched vehicle isn't known until a driver is assigned — before
+  // that there's nothing meaningful to show, so JagoMapMarkers falls back
+  // to its generic "cab" icon via the empty string.
+  String _matchedVehicleLabel() {
+    return (_booking?['vehicle_category_type'] ??
+            _booking?['vehicle_category_name'] ??
+            _booking?['driver']?['vehicleCategoryType'] ??
+            _booking?['driver']?['vehicleCategoryName'] ??
+            '')
+        .toString();
+  }
+
+  Future<void> _updateLiveMapMarkers() async {
+    final pickupLat = double.tryParse('${_booking?['pickup_lat'] ?? ''}');
+    final pickupLng = double.tryParse('${_booking?['pickup_lng'] ?? ''}');
+    final dropLat = double.tryParse('${_booking?['drop_lat'] ?? ''}');
+    final dropLng = double.tryParse('${_booking?['drop_lng'] ?? ''}');
+    final pickup = (pickupLat != null && pickupLng != null) ? LatLng(pickupLat, pickupLng) : null;
+    final drop = (dropLat != null && dropLng != null) ? LatLng(dropLat, dropLng) : null;
+
+    final markers = <Marker>{
+      if (pickup != null)
+        Marker(
+          markerId: const MarkerId('pickup'),
+          position: pickup,
+          infoWindow: const InfoWindow(title: 'Pickup'),
+          icon: await JagoMapMarkers.pickup(),
+        ),
+      if (drop != null)
+        Marker(
+          markerId: const MarkerId('drop'),
+          position: drop,
+          infoWindow: const InfoWindow(title: 'Drop'),
+          icon: await JagoMapMarkers.destination(),
+        ),
+      if (_driverLatLng != null)
+        Marker(
+          markerId: const MarkerId('driver'),
+          position: _driverLatLng!,
+          infoWindow: const InfoWindow(title: 'Driver'),
+          icon: await JagoMapMarkers.vehicle(_matchedVehicleLabel()),
+        ),
+    };
+    if (!mounted) return;
+    setState(() => _liveMapMarkers = markers);
+  }
 
   @override
   void initState() {
     super.initState();
+    _pulseCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400))..repeat();
+    _startSearchStageLoop();
     _wireSocket();
     _load();
     _poller = Timer.periodic(const Duration(seconds: 8), (_) => _load(silent: true));
   }
 
+  // Purely cosmetic loop that cycles the "Searching / Verifying / Matching"
+  // step indicator while a pooled driver is being found — mirrors
+  // TrackingScreen's identical loop for the normal Bike/Auto search screen.
+  void _startSearchStageLoop() {
+    _searchStageTimer?.cancel();
+    _searchStage = 0;
+    _searchStageTimer = Timer.periodic(const Duration(milliseconds: 1800), (_) {
+      if (!mounted || _status != 'searching') return;
+      setState(() => _searchStage = (_searchStage + 1) % 3);
+    });
+  }
+
   @override
   void dispose() {
+    _pulseCtrl.dispose();
+    _searchStageTimer?.cancel();
     _poller?.cancel();
     _poolStatusSub?.cancel();
     _seatSub?.cancel();
@@ -103,6 +175,13 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen> {
       final eventRequestId = event['requestId']?.toString() ?? '';
       if (eventRequestId.isNotEmpty && eventRequestId != widget.requestId) return;
       if (!mounted) return;
+      // Once the customer has cancelled locally, no later event — a driver
+      // match that was already in flight, a stale re-send, etc. — is allowed
+      // to pull this screen back out of 'cancelled'. The backend enforces
+      // the same rule authoritatively (matchRequest() re-checks status
+      // before assigning a driver); this is the client-side mirror of that
+      // guarantee so the UI can't visibly flicker back to "searching" either.
+      if (_status == 'cancelled') return;
       setState(() {
         _status = event['status']?.toString() ?? _status;
         if (_booking != null) {
@@ -131,6 +210,7 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen> {
           }
         }
       });
+      _updateLiveMapMarkers();
     });
 
     _seatSub = _socket.onPoolSeatUpdate.listen((event) {
@@ -145,6 +225,7 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen> {
       setState(() {
         _driverLatLng = LatLng(lat, lng);
       });
+      _updateLiveMapMarkers();
     });
     _callIncomingSub = _socket.onCallIncoming.listen((event) {
       final scope = event['callScope']?.toString();
@@ -210,6 +291,7 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen> {
           _loading = false;
           _error = null;
         });
+        _updateLiveMapMarkers();
       } else {
         if (!mounted) return;
         setState(() {
@@ -223,6 +305,49 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen> {
         _loading = false;
         _error = 'Network issue while loading your pool ride.';
       });
+    }
+  }
+
+  // Lightweight cancel used only while still 'searching' — no driver is
+  // involved yet, so there's nothing to explain a reason to and no refund
+  // policy applies. Fixes the "can't cancel while searching" issue: the
+  // full PoolCancellationScreen (reason + refund policy) stays reserved for
+  // cancelling an already-matched ride below.
+  Future<void> _cancelSearch() async {
+    if (_cancelling) return;
+    setState(() => _cancelling = true);
+    try {
+      final headers = await AuthService.getHeaders();
+      headers['Content-Type'] = 'application/json';
+      final res = await http.post(
+        Uri.parse(ApiConfig.localPoolCancel(widget.requestId)),
+        headers: headers,
+        body: jsonEncode({'reason': 'Customer cancelled while searching'}),
+      ).timeout(const Duration(seconds: 15));
+      if (!mounted) return;
+      if (res.statusCode == 200) {
+        // Stop watching this request immediately — no further socket event
+        // or poll response (including a driver match already in flight) can
+        // move this screen off 'cancelled' from here on.
+        _poller?.cancel();
+        _poolStatusSub?.cancel();
+        _seatSub?.cancel();
+        _driverLocationSub?.cancel();
+        setState(() => _status = 'cancelled');
+        Navigator.of(context).popUntil((route) => route.isFirst);
+        return;
+      }
+      final body = jsonDecode(res.body);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(body['message']?.toString() ?? 'Could not cancel search. Try again.')),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Network issue while cancelling search')),
+      );
+    } finally {
+      if (mounted) setState(() => _cancelling = false);
     }
   }
 
@@ -590,10 +715,20 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen> {
                               children: [
                                 _buildSheetHandle(),
                                 const SizedBox(height: 12),
-                                _headerCard(),
+                                if (_status == 'searching')
+                                  _buildSearchingHero()
+                                else
+                                  _headerCard(),
                                 const SizedBox(height: 14),
-                                _poolProgressCard(),
-                                const SizedBox(height: 14),
+                                // The animated searching hero above already
+                                // covers this moment on its own — showing
+                                // the 5-stage journey timeline at the same
+                                // time is redundant clutter before a driver
+                                // even exists yet.
+                                if (_status != 'searching') ...[
+                                  _poolProgressCard(),
+                                  const SizedBox(height: 14),
+                                ],
                                 _stopSequenceCard(),
                                 const SizedBox(height: 14),
                                 _seatOverviewCard(seats, fare),
@@ -624,8 +759,9 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen> {
                                   SizedBox(
                                     height: 56,
                                     child: ElevatedButton(
-                                      onPressed:
-                                          _cancelling ? null : _openCancellationFlow,
+                                      onPressed: _cancelling
+                                          ? null
+                                          : (_status == 'searching' ? _cancelSearch : _openCancellationFlow),
                                       style: ElevatedButton.styleFrom(
                                         backgroundColor: Colors.white,
                                         foregroundColor: Colors.red.shade600,
@@ -641,7 +777,7 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen> {
                                       child: Text(
                                         _cancelling
                                             ? 'Cancelling...'
-                                            : 'Cancel Pool Booking',
+                                            : (_status == 'searching' ? 'Cancel Search' : 'Cancel Pool Booking'),
                                         style: GoogleFonts.poppins(
                                           fontWeight: FontWeight.w600,
                                         ),
@@ -680,6 +816,204 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen> {
           const SizedBox(height: 6),
           Text(_statusSubtitle, style: GoogleFonts.poppins(color: Colors.white.withValues(alpha: 0.92), fontSize: 13)),
         ],
+      ),
+    );
+  }
+
+  // Same "actively searching" moment as the Bike/Auto tracking screen —
+  // pulsing radar icon, a live pill, and a 3-step Searching/Verifying/
+  // Matching tracker — reskinned for a pooled ride instead of a private one.
+  Widget _buildSearchingHero() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: JT.surface,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: JT.border),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 12, offset: const Offset(0, 4))],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildSearchPulseIcon(),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Finding your Car Share pilot',
+                      style: GoogleFonts.poppins(fontSize: 15, fontWeight: FontWeight.w700, color: JT.textPrimary, height: 1.15),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      "We're matching you with a nearby pooled driver heading your way.",
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.poppins(fontSize: 10.5, color: JT.textSecondary, height: 1.25),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _buildSearchLivePill(),
+          const SizedBox(height: 10),
+          _buildSearchStages(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSearchPulseIcon() {
+    return SizedBox(
+      width: 36,
+      height: 36,
+      child: AnimatedBuilder(
+        animation: _pulseCtrl,
+        builder: (context, child) {
+          final t = _pulseCtrl.value;
+          return Stack(
+            alignment: Alignment.center,
+            children: [
+              Transform.scale(
+                scale: 1 + t * 0.6,
+                child: Opacity(
+                  opacity: (1 - t).clamp(0.0, 1.0) * 0.35,
+                  child: Container(
+                    width: 32,
+                    height: 32,
+                    decoration: const BoxDecoration(color: JT.primary, shape: BoxShape.circle),
+                  ),
+                ),
+              ),
+              child!,
+            ],
+          );
+        },
+        child: Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(color: JT.primary.withValues(alpha: 0.12), shape: BoxShape.circle),
+          child: const Icon(Icons.search_rounded, color: JT.primary, size: 16),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSearchLivePill() {
+    final seats = int.tryParse('${_booking?['seats_requested'] ?? _booking?['seatsRequested'] ?? 1}') ?? 1;
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: JT.success.withValues(alpha: 0.3)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              AnimatedBuilder(
+                animation: _pulseCtrl,
+                builder: (context, child) => Container(
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    color: JT.success.withValues(alpha: 0.5 + _pulseCtrl.value * 0.5),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 5),
+              Text('Live', style: GoogleFonts.poppins(fontSize: 11, fontWeight: FontWeight.w700, color: JT.success)),
+              const SizedBox(width: 5),
+              Text('|', style: GoogleFonts.poppins(fontSize: 11, color: const Color(0xFFCBD5E1))),
+              const SizedBox(width: 5),
+              Text(
+                '$seats ${seats == 1 ? 'seat' : 'seats'} requested',
+                style: GoogleFonts.poppins(fontSize: 11, fontWeight: FontWeight.w500, color: JT.textSecondary),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSearchStages() {
+    final steps = <(IconData, String)>[
+      (Icons.groups_rounded, 'Searching\nnearby drivers'),
+      (Icons.verified_user_rounded, 'Verifying\navailability'),
+      (Icons.task_alt_rounded, 'Matching\nyour seat'),
+    ];
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+      decoration: BoxDecoration(
+        color: JT.bgSoft,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: JT.borderLight),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (int i = 0; i < steps.length; i++) ...[
+            _buildSearchStageStep(steps[i].$1, steps[i].$2, active: i == _searchStage, done: i < _searchStage),
+            if (i != steps.length - 1) Expanded(child: _buildSearchStageConnector(i < _searchStage)),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSearchStageStep(IconData icon, String label, {required bool active, required bool done}) {
+    final color = done ? JT.success : (active ? JT.primary : const Color(0xFF9CA3AF));
+    final bg = done
+        ? JT.success.withValues(alpha: 0.12)
+        : (active ? JT.primary.withValues(alpha: 0.12) : const Color(0xFFE5E7EB).withValues(alpha: 0.5));
+    return SizedBox(
+      width: 58,
+      child: Column(
+        children: [
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 300),
+            width: active ? 28 : 23,
+            height: active ? 28 : 23,
+            decoration: BoxDecoration(
+              color: bg,
+              shape: BoxShape.circle,
+              border: active ? Border.all(color: color, width: 1.3) : null,
+            ),
+            child: Icon(done ? Icons.check_rounded : icon, size: active ? 14 : 11, color: color),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            style: GoogleFonts.poppins(
+              fontSize: 8.5,
+              fontWeight: active ? FontWeight.w600 : FontWeight.w500,
+              color: active || done ? JT.textPrimary : const Color(0xFF9CA3AF),
+              height: 1.15,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSearchStageConnector(bool done) {
+    return Container(
+      margin: const EdgeInsets.only(top: 11, left: 2, right: 2),
+      height: 2,
+      decoration: BoxDecoration(
+        color: done ? JT.success.withValues(alpha: 0.5) : const Color(0xFFE5E7EB),
+        borderRadius: BorderRadius.circular(1),
       ),
     );
   }
@@ -735,29 +1069,11 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen> {
       );
     }
 
-    final markers = <Marker>{
-      if (pickup != null)
-        Marker(
-          markerId: const MarkerId('pickup'),
-          position: pickup,
-          infoWindow: const InfoWindow(title: 'Pickup'),
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
-        ),
-      if (drop != null)
-        Marker(
-          markerId: const MarkerId('drop'),
-          position: drop,
-          infoWindow: const InfoWindow(title: 'Drop'),
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
-        ),
-      if (_driverLatLng != null)
-        Marker(
-          markerId: const MarkerId('driver'),
-          position: _driverLatLng!,
-          infoWindow: const InfoWindow(title: 'Driver'),
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
-        ),
-    };
+    // Markers are built asynchronously via _updateLiveMapMarkers (called from
+    // _load/socket handlers whenever booking/driver-location data changes) so
+    // they show the actual matched vehicle's icon (JagoMapMarkers.vehicle),
+    // not a generic colored pin.
+    final markers = _liveMapMarkers;
 
     return _card(
       child: Column(

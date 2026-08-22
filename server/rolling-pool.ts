@@ -534,6 +534,8 @@ async function matchRequest(requestId: string): Promise<boolean> {
   let assignedPickupOrder = 1;
   let matchedFarePerSeat: number | null = null;
   let matchedTotalFare: number | null = null;
+  let matchedVehicleType: string | null = null;
+  let matchedVehicleName: string | null = null;
   const txClient = await dbPool.connect();
   try {
     await txClient.query("BEGIN");
@@ -552,6 +554,8 @@ async function matchRequest(requestId: string): Promise<boolean> {
       return false;
     }
     const matchedVehicleRow = lockR.rows[0] as any;
+    matchedVehicleType = matchedVehicleRow.vehicle_type ?? null;
+    matchedVehicleName = matchedVehicleRow.name ?? null;
 
     // The customer didn't choose a vehicle type — now that a specific
     // vehicle is actually matched, recalculate the real fare using its
@@ -661,6 +665,8 @@ async function matchRequest(requestId: string): Promise<boolean> {
       phone: di.phone,
       vehicleNumber: di.vehicle_number,
       vehicleModel: di.vehicle_model,
+      vehicleCategoryType: matchedVehicleType,
+      vehicleCategoryName: matchedVehicleName,
       rating: di.avg_rating,
       lat: parseFloat(di.current_lat || 0),
       lng: parseFloat(di.current_lng || 0),
@@ -1682,6 +1688,7 @@ export function registerRollingPoolRoutes(app: Express, authApp: any, requireAdm
           dps.driver_id, u.full_name as driver_name, u.phone as driver_phone,
           u.vehicle_number, u.vehicle_model, dd.avg_rating,
           dps.current_lat as driver_lat, dps.current_lng as driver_lng,
+          vc.vehicle_type AS vehicle_category_type, vc.name AS vehicle_category_name,
           CASE WHEN COALESCE(u.verification_status, '') IN ('verified', 'approved') THEN true ELSE false END AS driver_is_verified,
           (
             SELECT COUNT(*)::int
@@ -1704,6 +1711,7 @@ export function registerRollingPoolRoutes(app: Express, authApp: any, requireAdm
         LEFT JOIN driver_pool_sessions dps ON dps.id = prr.session_id
         LEFT JOIN users u ON u.id = dps.driver_id
         LEFT JOIN driver_details dd ON dd.user_id = dps.driver_id
+        LEFT JOIN vehicle_categories vc ON vc.id = prr.vehicle_category_id
         WHERE prr.id = ${requestId}::uuid AND prr.customer_id = ${customer.id}::uuid
         LIMIT 1
       `);

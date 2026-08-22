@@ -165,6 +165,12 @@ class _ParcelBookingScreenState extends State<ParcelBookingScreen>
   int _weightIdx = 0;
   bool _safetyAgreed = false;
 
+  // Weight-based vehicle recommendation (server-side, using the live
+  // parcel_vehicle_types config — not the static _kVehicles maxKg fallback)
+  // — suggested once a weight is picked in Step 2, so the customer isn't
+  // just guessing a vehicle in Step 0 before they know what they're sending.
+  Map<String, dynamic>? _recommendedVehicle;
+
   // Dynamic vehicles from backend (overrides _kVehicles when loaded)
   List<_ParcelVehicle> _dynamicVehicles = [];
 
@@ -309,6 +315,28 @@ class _ParcelBookingScreenState extends State<ParcelBookingScreen>
         }
       }
     } catch (_) {}
+  }
+
+  Future<void> _fetchRecommendedVehicle() async {
+    try {
+      final r = await http.post(
+        Uri.parse(ApiConfig.parcelVehicleRecommend),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'lat': _pickupLat,
+          'lng': _pickupLng,
+          'weightKg': _weightKg,
+        }),
+      ).timeout(const Duration(seconds: 15));
+      if (!mounted || r.statusCode != 200) return;
+      final data = jsonDecode(r.body) as Map<String, dynamic>;
+      final recommended = data['recommended'] as Map<String, dynamic>?;
+      setState(() => _recommendedVehicle = recommended);
+    } catch (_) {
+      // Silent — this is a suggestion, not a required step; the existing
+      // exceeds-maxKg guard on the weight list still prevents an
+      // incompatible vehicle/weight combination from being submitted.
+    }
   }
 
   @override
@@ -1606,7 +1634,13 @@ class _ParcelBookingScreenState extends State<ParcelBookingScreen>
           return Opacity(
             opacity: exceeds ? 0.4 : 1.0,
             child: GestureDetector(
-              onTap: exceeds ? null : () => setState(() => _weightIdx = i),
+              onTap: exceeds ? null : () {
+                setState(() {
+                  _weightIdx = i;
+                  _recommendedVehicle = null;
+                });
+                _fetchRecommendedVehicle();
+              },
               child: Container(
                 margin: const EdgeInsets.only(bottom: 10),
                 padding: const EdgeInsets.all(14),
@@ -1628,6 +1662,44 @@ class _ParcelBookingScreenState extends State<ParcelBookingScreen>
             ),
           );
         }),
+
+        if (_recommendedVehicle != null &&
+            _recommendedVehicle!['key']?.toString() != _vehicle.key) ...[
+          const SizedBox(height: 6),
+          Builder(builder: (context) {
+            final rec = _recommendedVehicle!;
+            final recName = rec['name']?.toString() ?? 'a different vehicle';
+            final recKey = rec['key']?.toString() ?? '';
+            return Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEFF6FF),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFBFDBFE)),
+              ),
+              child: Row(children: [
+                const Icon(Icons.lightbulb_outline_rounded, color: Color(0xFF2563EB), size: 20),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text('For this weight, $recName is a better fit.',
+                      style: GoogleFonts.poppins(fontSize: 12.5, color: const Color(0xFF1E40AF))),
+                ),
+                TextButton(
+                  onPressed: () {
+                    final idx = _vehicles.indexWhere((v) => v.key == recKey);
+                    if (idx >= 0) {
+                      setState(() {
+                        _vehicleIdx = idx;
+                        _recommendedVehicle = null;
+                      });
+                    }
+                  },
+                  child: const Text('Switch'),
+                ),
+              ]),
+            );
+          }),
+        ],
 
         const SizedBox(height: 24),
         Text('PACKAGE DESCRIPTION (OPTIONAL)', style: GoogleFonts.poppins(

@@ -76,6 +76,8 @@ class _TripScreenState extends State<TripScreen>
   Timer? _locationTimer;
   StreamSubscription<Position>? _posStream;
   Position? _lastTripPosition;
+  Position? _lastRawFix; // last GPS fix seen, incl. rejected ones — used only for anomaly deltas
+  DateTime? _lastAcceptedFixAt; // watchdog: forces trust if nothing passes the filter for too long
   Timer? _tripTimer;
   Timer? _statePollTimer; // 5s poll — server is source of truth
   List<String> _cancelReasons = [];
@@ -885,6 +887,8 @@ class _TripScreenState extends State<TripScreen>
       return;
     }
     _lastTripPosition = initialPos;
+    _lastRawFix = initialPos;
+    _lastAcceptedFixAt = DateTime.now();
     if (mounted) {
       setState(
           () => _center = LatLng(initialPos.latitude, initialPos.longitude));
@@ -922,20 +926,37 @@ class _TripScreenState extends State<TripScreen>
         debugPrint('[FRAUD] Mock GPS in active trip — ignoring');
         return;
       }
-      final prev = _lastTripPosition;
+      final prev = _lastRawFix ?? _lastTripPosition;
+      bool suspicious = false;
       if (prev != null) {
         final distM = Geolocator.distanceBetween(
             prev.latitude, prev.longitude, pos.latitude, pos.longitude);
         final elapsed = pos.timestamp.difference(prev.timestamp).inSeconds.abs();
         if (elapsed > 0 && (distM / elapsed) * 3.6 > 150) {
           debugPrint('[FRAUD] Speed anomaly in trip — ignoring');
-          return;
-        }
-        if (distM > 500 && elapsed < 5) {
+          suspicious = true;
+        } else if (distM > 500 && elapsed < 5) {
           debugPrint('[FRAUD] Teleport in trip — ignoring');
-          return;
+          suspicious = true;
         }
       }
+      // Watchdog: never let the anti-spoof filter block real GPS updates forever.
+      // If nothing has been accepted in 20s (e.g. filter kept rejecting), trust
+      // this reading anyway so the driver can't get permanently stuck.
+      final stuckTooLong = suspicious &&
+          _lastAcceptedFixAt != null &&
+          DateTime.now().difference(_lastAcceptedFixAt!) > const Duration(seconds: 20);
+      if (stuckTooLong) {
+        debugPrint('[FRAUD] Override — no accepted fix in 20s, trusting GPS to avoid lockout');
+        suspicious = false;
+      }
+      // Always advance the raw-fix anchor, even for a rejected reading, so a single
+      // stale/bad fix doesn't poison every future delta calc and permanently wedge
+      // _nearPickup at false. Only fixes that pass the check become the trusted
+      // _lastTripPosition used for broadcast/route/arrival.
+      _lastRawFix = pos;
+      if (suspicious) return;
+      _lastAcceptedFixAt = DateTime.now();
       _lastTripPosition = pos;
       if (!mounted) return;
       setState(() => _center = LatLng(pos.latitude, pos.longitude));
@@ -958,10 +979,16 @@ class _TripScreenState extends State<TripScreen>
       });
     });
 
-    // Server-update timer: every 3 s — uses cached position from stream
+    // Server-update timer: every 3 s — uses cached position from stream.
+    // Also recomputes distance/near-pickup here, not just on GPS stream
+    // events: the stream's distanceFilter (5 m) means it can go silent
+    // indefinitely once the driver stops moving — exactly what happens on
+    // arrival — which would otherwise freeze the "near pickup" gate forever
+    // even though the driver is right there.
     _locationTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
       final pos = _lastTripPosition;
       if (pos == null || !mounted) return;
+      _computeDistanceAndEta(pos.latitude, pos.longitude);
       _socket.sendLocation(
           lat: pos.latitude,
           lng: pos.longitude,

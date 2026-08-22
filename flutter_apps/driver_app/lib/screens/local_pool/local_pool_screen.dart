@@ -6,6 +6,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
+import 'package:jago_shared_core/jago_shared_core.dart';
 import '../../config/api_config.dart';
 import '../../config/jago_theme.dart';
 import '../../services/auth_service.dart';
@@ -69,6 +70,20 @@ class _LocalPoolScreenState extends State<LocalPoolScreen> {
   bool _ending = false;
   bool _updatingAccepting = false;
   int _maxSeats = 4;
+  // Persistent "Available for Car Share?" opt-in on the driver's registered
+  // vehicle — separate from (and a prerequisite for) starting a live pool
+  // session below. Loaded from the driver profile, toggled independently.
+  bool _carShareEnabled = false;
+  bool _loadingCarShareFlag = true;
+  bool _updatingCarShareFlag = false;
+  // The driver's actual registered vehicle capacity — used to keep the
+  // seat-count dropdown from offering more seats than the vehicle really
+  // has. The server independently caps maxSeats to this same value, so this
+  // is a UX fix (don't offer a choice the vehicle can't fulfill), not a
+  // correctness fix — the backend already enforces the real limit either way.
+  int? _vehicleTotalSeats;
+  String? _vehicleCategoryType;
+  BitmapDescriptor? _driverMarkerIcon;
   Map<String, dynamic>? _session;
   List<dynamic> _passengers = [];
   Map<String, dynamic>? _seatState;
@@ -86,7 +101,64 @@ class _LocalPoolScreenState extends State<LocalPoolScreen> {
     super.initState();
     _wireSocket();
     _load();
+    _loadCarShareFlag();
     _poller = Timer.periodic(const Duration(seconds: 8), (_) => _load(silent: true));
+  }
+
+  Future<void> _loadCarShareFlag() async {
+    try {
+      final headers = await AuthService.getHeaders();
+      final res = await http.get(Uri.parse(ApiConfig.driverProfile), headers: headers)
+          .timeout(const Duration(seconds: 12));
+      if (res.statusCode == 200 && mounted) {
+        final body = jsonDecode(res.body);
+        final user = (body is Map && body['user'] is Map) ? body['user'] as Map : body;
+        final seats = int.tryParse('${user['vehicleCategoryTotalSeats'] ?? ''}');
+        final vehicleType = user['vehicleCategoryType']?.toString();
+        setState(() {
+          _carShareEnabled = user['carShareEnabled'] == true;
+          _vehicleTotalSeats = (seats != null && seats > 0) ? seats : null;
+          _vehicleCategoryType = (vehicleType != null && vehicleType.isNotEmpty) ? vehicleType : null;
+          if (_vehicleTotalSeats != null && _maxSeats > _vehicleTotalSeats!) {
+            _maxSeats = _vehicleTotalSeats!;
+          }
+          _loadingCarShareFlag = false;
+        });
+        _loadDriverMarkerIcon();
+      } else if (mounted) {
+        setState(() => _loadingCarShareFlag = false);
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loadingCarShareFlag = false);
+    }
+  }
+
+  Future<void> _setCarShareEnabled(bool value) async {
+    setState(() => _updatingCarShareFlag = true);
+    try {
+      final headers = await AuthService.getHeaders();
+      headers['Content-Type'] = 'application/json';
+      final res = await http.patch(
+        Uri.parse(ApiConfig.updateProfile),
+        headers: headers,
+        body: jsonEncode({'carShareEnabled': value}),
+      ).timeout(const Duration(seconds: 12));
+      if (res.statusCode == 200 && mounted) {
+        setState(() => _carShareEnabled = value);
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not update Car Share setting. Try again.')),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Network issue while updating Car Share setting')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _updatingCarShareFlag = false);
+    }
   }
 
   @override
@@ -194,8 +266,17 @@ class _LocalPoolScreenState extends State<LocalPoolScreen> {
       } else {
         final body = jsonDecode(res.body);
         if (!mounted) return;
+        // The "Available for Car Share" toggle alone doesn't guarantee pool
+        // eligibility — the driver's assigned vehicle_category also has to
+        // be admin-flagged as pool-capable. When that's the actual blocker,
+        // the raw backend message doesn't tell the driver what to do next,
+        // so surface a clearer, actionable explanation for those two codes.
+        final code = body['code']?.toString() ?? '';
+        final message = (code == 'POOL_DRIVER_NOT_ELIGIBLE' || code == 'POOL_DRIVER_CATEGORY_MISMATCH')
+            ? 'Your registered vehicle isn\'t approved for Car Share yet. Contact JAGO support to get your vehicle category enabled for Car Share.'
+            : (body['message']?.toString() ?? 'Could not start local pool');
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(body['message']?.toString() ?? 'Could not start local pool')),
+          SnackBar(content: Text(message)),
         );
       }
     } catch (_) {
@@ -485,6 +566,12 @@ class _LocalPoolScreenState extends State<LocalPoolScreen> {
     }
   }
 
+  Future<void> _loadDriverMarkerIcon() async {
+    final icon = await JagoMapMarkers.vehicle(_vehicleCategoryType ?? 'cab');
+    if (!mounted) return;
+    setState(() => _driverMarkerIcon = icon);
+  }
+
   double? _readDouble(dynamic value) {
     if (value == null) return null;
     final parsed = double.tryParse(value.toString());
@@ -506,9 +593,10 @@ class _LocalPoolScreenState extends State<LocalPoolScreen> {
           markerId: const MarkerId('driver'),
           position: self,
           infoWindow: const InfoWindow(title: 'Driver'),
-          icon: BitmapDescriptor.defaultMarkerWithHue(
-            BitmapDescriptor.hueAzure,
-          ),
+          icon: _driverMarkerIcon ??
+              BitmapDescriptor.defaultMarkerWithHue(
+                BitmapDescriptor.hueAzure,
+              ),
         ),
       );
     }
@@ -875,48 +963,125 @@ class _LocalPoolScreenState extends State<LocalPoolScreen> {
     );
   }
 
-  Widget _buildStarter() {
+  Widget _buildCarShareToggleCard() {
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(18),
+      margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: _border),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Text('Start Local Pool Mode', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 18, color: _textPri)),
-          const SizedBox(height: 8),
-          Text('Go live for shared city rides. Passengers will be clustered by direction and live seat availability.', style: GoogleFonts.poppins(fontSize: 13, color: _textSec)),
-          const SizedBox(height: 18),
-          Text('Seats', style: GoogleFonts.poppins(fontWeight: FontWeight.w500)),
-          const SizedBox(height: 8),
-          DropdownButtonFormField<int>(
-            initialValue: _maxSeats,
-            decoration: InputDecoration(
-              filled: true,
-              fillColor: _surface,
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
-            ),
-            items: const [3, 4, 5, 6].map((e) => DropdownMenuItem(value: e, child: Text('$e seats'))).toList(),
-            onChanged: (v) => setState(() => _maxSeats = v ?? 4),
-          ),
-          const SizedBox(height: 18),
-          SizedBox(
-            width: double.infinity,
-            height: 56,
-            child: ElevatedButton(
-              onPressed: _starting ? null : _startSession,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _primary,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              ),
-              child: Text(_starting ? 'Starting...' : 'Start Local Pool', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.w600)),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Available for Car Share?', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 15, color: _textPri)),
+                const SizedBox(height: 4),
+                Text(
+                  'A persistent setting for your registered vehicle — required before you can start Local Pool Mode below.',
+                  style: GoogleFonts.poppins(fontSize: 12, color: _textSec),
+                ),
+              ],
             ),
           ),
+          const SizedBox(width: 12),
+          _loadingCarShareFlag
+              ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: _primary))
+              : Switch(
+                  value: _carShareEnabled,
+                  activeThumbColor: _primary,
+                  onChanged: _updatingCarShareFlag ? null : _setCarShareEnabled,
+                ),
         ],
       ),
+    );
+  }
+
+  Widget _buildStarter() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildCarShareToggleCard(),
+        Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: _border),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Start Local Pool Mode', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 18, color: _textPri)),
+              const SizedBox(height: 8),
+              Text('Go live for shared city rides. Passengers will be clustered by direction and live seat availability.', style: GoogleFonts.poppins(fontSize: 13, color: _textSec)),
+              if (!_loadingCarShareFlag && !_carShareEnabled) ...[
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF7ED),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFFFED7AA)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.info_outline_rounded, color: Color(0xFFC2410C), size: 18),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Turn on "Available for Car Share?" above first.',
+                          style: GoogleFonts.poppins(fontSize: 12.5, color: const Color(0xFFC2410C), fontWeight: FontWeight.w500),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              const SizedBox(height: 18),
+              Text('Seats', style: GoogleFonts.poppins(fontWeight: FontWeight.w500)),
+              const SizedBox(height: 8),
+              Builder(builder: (context) {
+                // Only offer seat counts the driver's actual registered
+                // vehicle can fulfill; fall back to the full range if the
+                // vehicle's capacity isn't known yet.
+                final options = [3, 4, 5, 6]
+                    .where((e) => _vehicleTotalSeats == null || e <= _vehicleTotalSeats!)
+                    .toList();
+                final safeOptions = options.isEmpty ? const [3, 4, 5, 6] : options;
+                final value = safeOptions.contains(_maxSeats) ? _maxSeats : safeOptions.first;
+                return DropdownButtonFormField<int>(
+                  initialValue: value,
+                  decoration: InputDecoration(
+                    filled: true,
+                    fillColor: _surface,
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
+                  ),
+                  items: safeOptions.map((e) => DropdownMenuItem(value: e, child: Text('$e seats'))).toList(),
+                  onChanged: _carShareEnabled ? (v) => setState(() => _maxSeats = v ?? safeOptions.first) : null,
+                );
+              }),
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                height: 56,
+                child: ElevatedButton(
+                  onPressed: (_starting || !_carShareEnabled) ? null : _startSession,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _primary,
+                    disabledBackgroundColor: _border,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  ),
+                  child: Text(_starting ? 'Starting...' : 'Start Local Pool', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.w600)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 

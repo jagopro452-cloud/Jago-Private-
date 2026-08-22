@@ -130,3 +130,62 @@ describe("Parcel module - Phase 5 P1: admin parcel-refunds now operates on the r
     expect(body).not.toMatch(/UPDATE users SET wallet_balance = wallet_balance \+/);
   });
 });
+
+// Regression guard: Bike Parcel is a service Bike Taxi riders also perform —
+// bike_parcel must resolve to the same Bike rider pool as Bike Taxi, not a
+// separate rider vehicle type. Root cause: normal ride dispatch
+// (getMatchingDriverCategoryIds in vehicle-matching.ts) recognizes a wide set
+// of bike synonyms (motor_bike, motorbike, motorcycle, two_wheeler, two_wheel,
+// bike_ride, ...) via normalizeBookingVehicleType, but parcel dispatch
+// (resolveAllowedCategoryIds in parcel-advanced.ts) only matched categories
+// whose name/vehicle_type literally contained the substring "bike" — a
+// second, narrower, independently-maintained mapping. A Bike Taxi rider
+// registered under any non-"bike"-literal synonym would be found by Bike
+// Taxi dispatch but silently excluded from Bike Parcel dispatch. The fix
+// reuses normalizeBookingVehicleType (the same function Bike Taxi dispatch
+// uses) instead of duplicating a second bike-name list.
+describe("Parcel module - bike_parcel resolves to the same Bike Taxi rider pool", () => {
+  const vehicleMatchingSource = readFileSync(join(repoRoot, "server", "vehicle-matching.ts"), "utf8");
+  const parcelAdvancedSource = readFileSync(join(repoRoot, "server", "parcel-advanced.ts"), "utf8");
+
+  it("normalizeBookingVehicleType's alias table still treats every Bike Taxi synonym as 'bike' (the same canonical key Bike Taxi dispatch matches on)", () => {
+    const idx = vehicleMatchingSource.indexOf("export function normalizeBookingVehicleType");
+    const nextIdx = vehicleMatchingSource.indexOf("export function", idx + 1);
+    const body = vehicleMatchingSource.slice(idx, nextIdx);
+    expect(body).toContain('key === "bike_parcel" || (key.includes("parcel") && key.includes("bike"))');
+    expect(body).toContain('return "bike_parcel"');
+    for (const alias of [
+      'key === "bike"', 'key === "bike_ride"', 'key === "motor_bike"', 'key === "motorbike"',
+      'key === "motor_cycle"', 'key === "motorcycle"', 'key === "two_wheeler"', 'key === "two_wheel"',
+    ]) {
+      expect(body).toContain(alias);
+    }
+    // The parcel check runs before the generic bike-synonym block, so
+    // "bike_parcel"/"bike delivery" resolve to "bike_parcel", not "bike".
+    expect(body.indexOf('return "bike_parcel"')).toBeLessThan(body.indexOf('return "bike";'));
+  });
+
+  it("getMatchingDriverCategoryIds (Bike Taxi dispatch) still resolves the 'bike' request key to ['bike'] — unchanged by the parcel fix", () => {
+    expect(vehicleMatchingSource).toContain('case "bike":\n    case "bike_ride":\n      return ["bike"];');
+  });
+
+  it("resolveAllowedCategoryIds (Bike Parcel dispatch) reuses normalizeBookingVehicleType instead of a second hand-maintained bike-name list", () => {
+    expect(parcelAdvancedSource).toContain(
+      'import { uuidArraySql, normalizeBookingVehicleType } from "./vehicle-matching";',
+    );
+    const idx = parcelAdvancedSource.indexOf("async function resolveAllowedCategoryIds");
+    const nextIdx = parcelAdvancedSource.indexOf("export interface ParcelMatchResult");
+    const body = parcelAdvancedSource.slice(idx, nextIdx);
+    expect(body).toContain('if (parcelKey === "bike_parcel")');
+    expect(body).toContain("normalizeBookingVehicleType(row.vehicle_type || row.name)");
+    expect(body).toContain('if (canonical === "bike") idSet.add(String(row.id));');
+  });
+
+  it("the union only applies to bike_parcel — auto_parcel/tata_ace/pickup_truck/bolero_cargo matching is untouched", () => {
+    const idx = parcelAdvancedSource.indexOf("async function resolveAllowedCategoryIds");
+    const nextIdx = parcelAdvancedSource.indexOf("export interface ParcelMatchResult");
+    const body = parcelAdvancedSource.slice(idx, nextIdx);
+    // Only one canonical-vehicle-type branch exists, and it's gated to bike_parcel specifically.
+    expect((body.match(/parcelKey === /g) || []).length).toBe(1);
+  });
+});

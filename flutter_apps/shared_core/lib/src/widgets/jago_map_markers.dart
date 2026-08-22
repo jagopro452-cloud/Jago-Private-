@@ -2,6 +2,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:http/http.dart' as http;
 
 // Moved from customer_app/driver_app's lib/widgets/jago_map_markers.dart —
 // the two copies were byte-for-byte identical (410/410 lines, 0 diff).
@@ -18,10 +19,96 @@ const Color _errorColor = Color(0xFFDC2626);
 class JagoMapMarkers {
   static final Map<String, BitmapDescriptor> _cache = {};
 
+  // ── Photo-based vehicle markers ────────────────────────────────────────
+  // Centralized rawType -> Cloudinary photo mapping for nearby/assigned
+  // driver markers. To add a new vehicle type's photo marker, add one entry
+  // here (and a match rule in _photoKeyFor if its name doesn't already fall
+  // under an existing rule) — no other caller needs to change. Any type not
+  // covered here (or whose photo fails to load) falls back to the existing
+  // hand-drawn _buildVehicleMarker below, so an unrecognized/failed fetch
+  // never breaks marker rendering.
+  // The 5 newer source photos (auto/mini_car/sedan/premium/bike_parcel) were
+  // supplied with a solid white background, which rendered as an ugly white
+  // square on the map. Cloudinary's e_make_transparent transform (same
+  // technique already used for the home-screen bike artwork) strips a
+  // near-white background at the source so the marker shows just the
+  // vehicle. The original bike-on-map photo is already transparent and is
+  // left untouched.
+  static const Map<String, String> _vehiclePhotoUrls = {
+    'bike': 'https://res.cloudinary.com/kits/image/upload/v1787043541/bikeonmap_mhti9m.png',
+    'auto': 'https://res.cloudinary.com/kits/image/upload/e_make_transparent:15/q_auto/f_png/v1787218843/ChatGPT_Image_Aug_19_2026_12_15_22_PM_icbpan.png',
+    'mini_car': 'https://res.cloudinary.com/kits/image/upload/e_make_transparent:15/q_auto/f_png/v1787218843/ChatGPT_Image_Aug_19_2026_12_14_52_PM_w71se5.png',
+    'sedan': 'https://res.cloudinary.com/kits/image/upload/e_make_transparent:15/q_auto/f_png/v1787218843/ChatGPT_Image_Aug_19_2026_12_17_44_PM_twmivt.png',
+    'premium': 'https://res.cloudinary.com/kits/image/upload/e_make_transparent:15/q_auto/f_png/v1787218843/ChatGPT_Image_Aug_19_2026_12_20_53_PM_kmitap.png',
+    'bike_parcel': 'https://res.cloudinary.com/kits/image/upload/e_make_transparent:15/q_auto/f_png/v1787218843/ChatGPT_Image_Aug_19_2026_12_24_05_PM_rr9pfc.png',
+  };
+
+  static final Map<String, BitmapDescriptor?> _photoCache = {};
+  static final Map<String, Future<BitmapDescriptor?>> _photoLoading = {};
+
+  /// Maps a raw vehicle type/category string exactly as callers already have
+  /// it (e.g. "Bike", "Mini Car", "3-Wheeler / Auto", "Bike Delivery") to one
+  /// of the canonical keys in [_vehiclePhotoUrls], or null if there's no
+  /// photo marker for it.
+  static String? _photoKeyFor(String rawType) {
+    final t = rawType.toLowerCase();
+    if (t.contains('bike parcel') ||
+        t.contains('parcel bike') ||
+        t.contains('bike_parcel') ||
+        t.contains('bike delivery')) {
+      return 'bike_parcel';
+    }
+    if (t.contains('bike') || t.contains('moto') || t.contains('scooter')) {
+      return 'bike';
+    }
+    if (t.contains('mini car') || t.contains('mini_car')) return 'mini_car';
+    if (t.contains('sedan')) return 'sedan';
+    if (t.contains('premium')) return 'premium';
+    if (t.contains('auto') || t.contains('rickshaw')) return 'auto';
+    return null;
+  }
+
+  static Future<BitmapDescriptor?> _loadPhotoMarker(String key) {
+    if (_photoCache.containsKey(key)) return Future.value(_photoCache[key]);
+    return _photoLoading[key] ??= _fetchPhotoMarker(key).then((icon) {
+      _photoCache[key] = icon;
+      _photoLoading.remove(key);
+      return icon;
+    });
+  }
+
+  static Future<BitmapDescriptor?> _fetchPhotoMarker(String key) async {
+    final url = _vehiclePhotoUrls[key];
+    if (url == null) return null;
+    try {
+      final res =
+          await http.get(Uri.parse(url)).timeout(const Duration(seconds: 8));
+      if (res.statusCode != 200) return null;
+      // Downscale during decode — same target size as the hand-drawn
+      // markers use — so a full-resolution source photo doesn't render as
+      // an oversized marker on the map.
+      final codec =
+          await ui.instantiateImageCodec(res.bodyBytes, targetWidth: 96);
+      final frame = await codec.getNextFrame();
+      final byteData =
+          await frame.image.toByteData(format: ui.ImageByteFormat.png);
+      if (byteData == null) return null;
+      return BitmapDescriptor.bytes(byteData.buffer.asUint8List());
+    } catch (_) {
+      return null;
+    }
+  }
+
   static Future<BitmapDescriptor> vehicle(
     String rawType, {
     bool searching = false,
   }) async {
+    final photoKey = _photoKeyFor(rawType);
+    if (photoKey != null) {
+      final photo = await _loadPhotoMarker(photoKey);
+      if (photo != null) return photo;
+    }
+
     final spec = _VehicleSpec.from(rawType);
     final cacheKey = 'vehicle:${spec.cacheKey}:$searching';
     final cached = _cache[cacheKey];
@@ -34,11 +121,79 @@ class JagoMapMarkers {
   static Future<BitmapDescriptor> pickup() =>
       _pin('pickup', icon: Icons.my_location_rounded, fill: _primaryColor);
 
-  static Future<BitmapDescriptor> destination() => _pin(
-        'destination',
-        icon: Icons.location_on_rounded,
-        fill: _errorColor,
-      );
+  // Dedicated (not the shared _pin) drawing so the destination gets a richer
+  // gradient, bigger ring and a finish-flag icon — a distinct "trip end"
+  // marker rather than reusing the generic pickup pin shape/color.
+  static Future<BitmapDescriptor> destination() async {
+    const key = 'destination_v2';
+    final cached = _cache[key];
+    if (cached != null) return cached;
+
+    const double size = 160;
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder, const Rect.fromLTWH(0, 0, size, size));
+    const center = Offset(size / 2, 58);
+
+    final shadowPaint = Paint()
+      ..color = Colors.black.withValues(alpha: 0.20)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 11);
+    canvas.drawOval(
+      Rect.fromCenter(center: const Offset(size / 2, 134), width: 48, height: 15),
+      shadowPaint,
+    );
+
+    final pinPath = Path()
+      ..moveTo(center.dx, 144)
+      ..quadraticBezierTo(center.dx + 30, 110, center.dx + 36, 76)
+      ..arcToPoint(
+        Offset(center.dx - 36, 76),
+        radius: const Radius.circular(36),
+        clockwise: false,
+      )
+      ..quadraticBezierTo(center.dx - 30, 110, center.dx, 144)
+      ..close();
+
+    canvas.drawPath(
+      pinPath,
+      Paint()
+        ..shader = ui.Gradient.linear(
+          const Offset(0, 16),
+          const Offset(size, 120),
+          [const Color(0xFFFF6B7A), _errorColor, const Color(0xFF8E0F27)],
+        ),
+    );
+    canvas.drawPath(
+      pinPath,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 6
+        ..color = Colors.white,
+    );
+
+    canvas.drawCircle(center, 26, Paint()..color = Colors.white);
+    canvas.drawCircle(
+      center,
+      26,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2
+        ..color = const Color(0xFFFFE1E4),
+    );
+    _paintIcon(
+      canvas,
+      icon: Icons.sports_score_rounded,
+      color: _errorColor,
+      center: center,
+      size: 30,
+    );
+
+    final image =
+        await recorder.endRecording().toImage(size.toInt(), size.toInt());
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    final result = BitmapDescriptor.bytes(bytes!.buffer.asUint8List());
+    _cache[key] = result;
+    return result;
+  }
 
   static Future<BitmapDescriptor> _pin(
     String key, {
@@ -296,10 +451,38 @@ class _VehicleSpec {
                 ? _VehicleBadge.pool
                 : _VehicleBadge.none;
 
+    // Order matters: "Mini Truck (Tata Ace)" and "Pickup Truck" both contain
+    // "truck", so the more specific tata-ace/bolero-pickup checks must run
+    // before the generic tempo/truck fallback or they'd all collapse into
+    // the same icon.
+    if (type.contains('tata ace') ||
+        type.contains('tata_ace') ||
+        type.contains('mini truck') ||
+        type.contains('mini_truck')) {
+      return _VehicleSpec(
+        cacheKey: 'tataace${badge.name}',
+        icon: Icons.fire_truck_rounded,
+        badge: badge,
+      );
+    }
+    if (type.contains('bolero') || type.contains('pickup')) {
+      return _VehicleSpec(
+        cacheKey: 'bolero${badge.name}',
+        icon: Icons.agriculture_rounded,
+        badge: badge,
+      );
+    }
     if (type.contains('tempo') || type.contains('truck')) {
       return _VehicleSpec(
         cacheKey: 'tempo${badge.name}',
         icon: Icons.local_shipping_rounded,
+        badge: badge,
+      );
+    }
+    if (type.contains('van')) {
+      return _VehicleSpec(
+        cacheKey: 'van${badge.name}',
+        icon: Icons.local_shipping_outlined,
         badge: badge,
       );
     }
@@ -323,6 +506,24 @@ class _VehicleSpec {
         icon: Icons.directions_car_filled_rounded,
         badge: badge,
         premium: true,
+      );
+    }
+    // SUV and XL are one eligible-vehicle category from the customer's POV
+    // (see booking_screen.dart's Premium-family matcher) but get their own
+    // distinct marker since a matched driver's actual vehicle should always
+    // be visually identifiable.
+    if (type.contains('suv') || type.contains('xl')) {
+      return _VehicleSpec(
+        cacheKey: 'suv${badge.name}',
+        icon: Icons.airport_shuttle_rounded,
+        badge: badge,
+      );
+    }
+    if (type.contains('sedan')) {
+      return _VehicleSpec(
+        cacheKey: 'sedan${badge.name}',
+        icon: Icons.time_to_leave_rounded,
+        badge: badge,
       );
     }
     return _VehicleSpec(

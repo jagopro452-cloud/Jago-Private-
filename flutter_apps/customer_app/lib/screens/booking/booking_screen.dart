@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../../core/map_night_style.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
+import 'package:jago_shared_core/jago_shared_core.dart';
 import 'package:razorpay_flutter/razorpay_flutter.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -47,6 +48,11 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
   bool _estimating = true;
   List<Map<String, dynamic>> _allFares = [];
   int _selectedFareIndex = 0;
+  // Set once the Home-screen category (widget.vehicleCategoryName) has been
+  // matched into _allFares the first time. Guards the pre-selection sync in
+  // _estimateFare so later refreshes (route polyline resolving, the vcId-null
+  // retry in _confirmBooking) don't stomp on a manual tap the user made.
+  bool _initialSelectionApplied = false;
   String _paymentMethod = 'cash';
   double _walletBalance = 0;
   final TextEditingController _promoCtrl = TextEditingController();
@@ -85,6 +91,13 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
   BitmapDescriptor? _dropMarkerIcon;
   Offset _pickupMarkerAnchor = const Offset(0.5, 0.5);
   Offset _dropMarkerAnchor = const Offset(0.5, 0.5);
+
+  // Live nearby-driver markers shown on the vehicle-selection map — same
+  // polling pattern as the searching screen in TrackingScreen, so available
+  // pilots are visible before the user books. Marker photos (per driver's
+  // own vehicle type) are resolved centrally by JagoMapMarkers.vehicle.
+  Set<Marker> _nearbyDriverMarkers = {};
+  Timer? _nearbyDriversTimer;
 
   static const Color _jagoPrimary = JT.primary;
 
@@ -165,17 +178,45 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
   static bool _shouldHideVehicle(String name) {
     final n = name.toLowerCase();
     
-    // Whitelist only requested categories: bike, auto, cab, premium
+    // Whitelist only requested categories: bike, auto, cab, premium, suv
     // Relaxed contains checks to avoid hiding valid variations (e.g. "Bike - Fast")
     if (n.contains('bike')) return false;
     if (n.contains('auto')) return false;
     if (n.contains('cab')) return false;
     if (n.contains('premium')) return false;
     if (n.contains('sedan')) return false;
+    if (n.contains('suv')) return false;
     if (n.contains('car')) return false;
 
-    // Hide everything else (Parcel, SUV, Pool, etc. if not requested)
+    // Hide everything else (Parcel, Pool, etc. if not requested)
     return true;
+  }
+
+  // Whether a fare's vehicle name belongs to the category the user tapped
+  // on Home. Bike/Auto are simple 1:1 matches, but Cab and Premium are
+  // product *families* covering several real vehicle_categories rows:
+  //   Cab     -> Cab, AC Cab, Non-AC Cab, Mini Car, Sedan
+  //   Premium -> Premium, SUV / XL
+  // Matching by name pattern (not a fixed id list) means a newly created
+  // "AC Cab" / "Non-AC Cab" category picks up the Cab grouping automatically
+  // without another app release, as long as its name contains "cab".
+  static bool _fareMatchesCategoryName(String fareName, String targetName) {
+    final f = fareName.toLowerCase().trim();
+    final t = targetName.toLowerCase().trim();
+    if (t.isEmpty) return true;
+
+    if (t == 'cab') {
+      return f.contains('cab') || f.contains('mini car') || f.contains('sedan');
+    }
+    if (t == 'premium') {
+      return f.contains('premium') || f.contains('suv');
+    }
+
+    if (f == t) return true;
+    if (f.startsWith(t)) return true;
+    final fFirstWord = f.split(RegExp(r'\s+')).first;
+    final tFirstWord = t.split(RegExp(r'\s+')).first;
+    return fFirstWord == tFirstWord;
   }
 
   static Color _accentForVehicle(String name) {
@@ -431,6 +472,49 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
     _fetchWallet();
     _fetchRoutePolyline();
     _buildRouteMarkerIcons();
+    _fetchNearbyDrivers();
+    _nearbyDriversTimer =
+        Timer.periodic(const Duration(seconds: 5), (_) => _fetchNearbyDrivers());
+  }
+
+  Future<void> _fetchNearbyDrivers() async {
+    if (!mounted) return;
+    try {
+      final headers = await AuthService.getHeaders();
+      final uri = Uri.parse(ApiConfig.nearbyDrivers).replace(queryParameters: {
+        'lat': _pickupLatLng.latitude.toString(),
+        'lng': _pickupLatLng.longitude.toString(),
+        'radius': '3',
+      });
+      final r = await http
+          .get(uri, headers: headers)
+          .timeout(const Duration(seconds: 5));
+      if (!mounted || r.statusCode != 200) return;
+
+      final data = jsonDecode(r.body) as Map<String, dynamic>;
+      final drivers =
+          (data['drivers'] as List<dynamic>?)?.cast<Map<String, dynamic>>() ??
+              [];
+
+      final Set<Marker> markers = {};
+      for (final d in drivers) {
+        final lat = double.tryParse(d['lat']?.toString() ?? '');
+        final lng = double.tryParse(d['lng']?.toString() ?? '');
+        if (lat == null || lng == null) continue;
+        final id = d['id']?.toString() ?? '';
+        final vName =
+            (d['vehicleCategoryName'] ?? d['vehicleName'] ?? 'bike').toString();
+        markers.add(Marker(
+          markerId: MarkerId('nearby_$id'),
+          position: LatLng(lat, lng),
+          icon: await JagoMapMarkers.vehicle(vName, searching: true),
+          anchor: const Offset(0.5, 0.5),
+          rotation: double.tryParse(d['heading']?.toString() ?? '0') ?? 0,
+          flat: true,
+        ));
+      }
+      if (mounted) setState(() => _nearbyDriverMarkers = markers);
+    } catch (_) {}
   }
 
   /// Builds the floating "Pickup"/"Drop" label-chip markers shown on the
@@ -538,6 +622,7 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
   @override
   void dispose() {
     _debounce?.cancel();
+    _nearbyDriversTimer?.cancel();
     _promoCtrl.dispose();
     _razorpay.clear();
     _passengerNameCtrl.dispose();
@@ -651,11 +736,30 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
                 return true;
               }).toList();
             }
+            // Dynamic vehicle list: a specific category tapped on Home (e.g.
+            // "Bike") restricts this screen to just that category. Coming
+            // from the generic "Book a Ride" tile leaves vehicleCategoryName
+            // unset, so every ride category still shows.
+            final targetCategoryName = widget.vehicleCategoryName;
+            final hasTargetCategory = cat != 'parcel' && targetCategoryName != null && targetCategoryName.isNotEmpty;
+            if (hasTargetCategory) {
+              final byCategory = filtered.where((f) {
+                final vname = (f['vehicleCategoryName'] ?? f['vehicleName'] ?? f['name'] ?? '').toString();
+                return _fareMatchesCategoryName(vname, targetCategoryName);
+              }).toList();
+              if (byCategory.isNotEmpty) filtered = byCategory;
+            }
             _allFares = filtered;
-            
-            // Ensure we have at least the core categories (Bike, Auto, Cab)
+
+            // Ensure we have at least the core categories (Bike, Auto, Cab) —
+            // but only the ones matching the requested category, if any.
             if (widget.category != 'parcel') {
-              final fallbacks = _buildFallbackFares();
+              var fallbacks = _buildFallbackFares();
+              if (hasTargetCategory) {
+                fallbacks = fallbacks
+                    .where((fb) => _fareMatchesCategoryName(fb['vehicleCategoryName'].toString(), targetCategoryName))
+                    .toList();
+              }
               for (var fb in fallbacks) {
                 final fbName = fb['vehicleCategoryName'].toString();
                 // Add fallback if no similar category exists in server result
@@ -667,20 +771,26 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
                 }
               }
             }
-            
+
             // Final safety check: if still empty (shouldn't happen with fallbacks), use all fallbacks
             if (_allFares.isEmpty) _allFares = _buildFallbackFares();
-            if (widget.vehicleCategoryId != null || widget.vehicleCategoryName != null) {
+            // Pre-select the Home-screen category the first time it's matched
+            // in; later refreshes (route polyline resolving, the vcId-null
+            // retry in _confirmBooking) must not overwrite a manual tap.
+            if (!_initialSelectionApplied && (widget.vehicleCategoryId != null || widget.vehicleCategoryName != null)) {
               final targetName = (widget.vehicleCategoryName ?? '').toLowerCase();
               final idx = _allFares.indexWhere((f) {
-                final fName = (f['vehicleCategoryName'] ?? f['vehicleName'] ?? f['name'] ?? '').toString().toLowerCase();
+                final fName = (f['vehicleCategoryName'] ?? f['vehicleName'] ?? f['name'] ?? '').toString();
                 final fId = f['vehicleCategoryId']?.toString() ?? f['id']?.toString();
                 // Prefer a real, bookable fare (non-null category id) over a
                 // same-named client-side fallback placeholder when both match.
                 return (fId == widget.vehicleCategoryId && fId != null) ||
-                       (targetName.isNotEmpty && fName.contains(targetName) && fId != null);
+                       (targetName.isNotEmpty && _fareMatchesCategoryName(fName, targetName) && fId != null);
               });
-              if (idx >= 0) _selectedFareIndex = idx;
+              if (idx >= 0) {
+                _selectedFareIndex = idx;
+                _initialSelectionApplied = true;
+              }
             }
           });
         } else {
@@ -821,7 +931,10 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
           return;
         }
         Navigator.pushReplacement(context, MaterialPageRoute(
-          builder: (_) => TrackingScreen(tripId: tripId)));
+          builder: (_) => TrackingScreen(
+            tripId: tripId,
+            initialFareEstimate: _finalFare > 0 ? _finalFare : null,
+          )));
       } else {
         if (!mounted) return;
         try {
@@ -1278,6 +1391,7 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
                       icon: _dropMarkerIcon ??
                           BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
                     ),
+                    ..._nearbyDriverMarkers,
                   },
                   polylines: _polylines,
                   zoomControlsEnabled: false,
@@ -1679,6 +1793,18 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _buildStepSectionTitle('Vehicle selection'),
+              // TEMP diagnostic: shows the Home-screen category this screen
+              // was opened with and what _allFares actually resolved to, so
+              // the Cab/Premium-shows-everything issue can be traced on an
+              // installed release build. Remove once confirmed fixed.
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: Text(
+                  'target=${widget.vehicleCategoryName ?? "(none)"} '
+                  'allFares=${_allFares.map((f) => f['vehicleCategoryName'] ?? f['vehicleName'] ?? f['name']).join(",")}',
+                  style: const TextStyle(fontSize: 10, color: Color(0xFFEF4444)),
+                ),
+              ),
               const SizedBox(height: 12),
               _buildVehicleSelector(statuses),
             ],
@@ -2405,7 +2531,10 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
           onTap: () {
             if (!isActive) return;
             HapticFeedback.selectionClick();
-            setState(() => _selectedFareIndex = i);
+            setState(() {
+              _selectedFareIndex = i;
+              _initialSelectionApplied = true;
+            });
           },
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 300),

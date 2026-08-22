@@ -20,6 +20,14 @@ class PremiumLocationScreen extends StatefulWidget {
   final double pickupLng;
   final String? vehicleCategoryId;
   final String? vehicleCategoryName;
+  // When set, "Confirm Trip" hands the picked pickup/drop off to this
+  // callback instead of navigating to BookingScreen/ParcelBookingScreen —
+  // lets other flows (e.g. Car Share) reuse this exact picker without
+  // altering the normal ride/parcel booking navigation for every other tile.
+  final void Function(
+    String pickupAddress, double pickupLat, double pickupLng,
+    String dropAddress, double dropLat, double dropLng,
+  )? onLocationsConfirmed;
 
   const PremiumLocationScreen({
     super.key,
@@ -29,6 +37,7 @@ class PremiumLocationScreen extends StatefulWidget {
     this.pickupLng = 0,
     this.vehicleCategoryId,
     this.vehicleCategoryName,
+    this.onLocationsConfirmed,
   });
 
   @override
@@ -372,6 +381,13 @@ class _PremiumLocationScreenState extends State<PremiumLocationScreen> {
 
   void _proceedToBooking() {
     if (!_tripReady) return;
+    if (widget.onLocationsConfirmed != null) {
+      widget.onLocationsConfirmed!(
+        _pickupCtrl.text, _pickupLat, _pickupLng,
+        _dropCtrl.text, _dropLat, _dropLng,
+      );
+      return;
+    }
     if (widget.serviceType == 'parcel') {
       Navigator.push(context, MaterialPageRoute(builder: (context) => ParcelBookingScreen(
         pickupLat: _pickupLat, pickupLng: _pickupLng, dropLat: _dropLat, dropLng: _dropLng,
