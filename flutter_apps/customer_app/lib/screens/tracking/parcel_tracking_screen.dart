@@ -86,6 +86,18 @@ class _ParcelTrackingScreenState extends State<ParcelTrackingScreen>
 
   bool get _canCancel => _status == 'pending' || _status == 'searching';
 
+  // The pilot needs this OTP from the customer to verify pickup — it was
+  // generated at booking time (parcel_orders.pickup_otp) and already
+  // returned by /track, but nothing ever displayed it here.
+  String? get _pickupOtp {
+    final otp = _order?['pickupOtp']?.toString() ?? _order?['pickup_otp']?.toString();
+    return (otp != null && otp.isNotEmpty && otp != 'null') ? otp : null;
+  }
+
+  bool get _showPickupOtp =>
+      _pickupOtp != null &&
+      !['picked_up', 'in_transit', 'completed', 'cancelled'].contains(_status);
+
   double? _readDouble(dynamic value) {
     if (value == null) return null;
     final parsed = double.tryParse(value.toString());
@@ -478,6 +490,77 @@ class _ParcelTrackingScreenState extends State<ParcelTrackingScreen>
     );
   }
 
+  Widget _pickupOtpCard() {
+    final otp = _pickupOtp ?? '';
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [JT.primary.withValues(alpha: 0.08), JT.primary.withValues(alpha: 0.02)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: JT.primary.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'SHARE WITH PILOT AT PICKUP',
+                  style: GoogleFonts.poppins(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.6,
+                    color: JT.primaryDark,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: otp.split('').map((digit) {
+                    return Container(
+                      width: 32,
+                      height: 40,
+                      margin: const EdgeInsets.only(right: 8),
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: JT.primary.withValues(alpha: 0.3)),
+                      ),
+                      child: Text(
+                        digit,
+                        style: GoogleFonts.poppins(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                          color: const Color(0xFF0F172A),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: 'Copy OTP',
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: otp));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('OTP copied')),
+              );
+            },
+            icon: const Icon(Icons.copy_rounded, color: JT.primary, size: 20),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _trackingActionButton({
     required IconData icon,
     required String label,
@@ -688,6 +771,10 @@ class _ParcelTrackingScreenState extends State<ParcelTrackingScreen>
                                     color: const Color(0xFF64748B),
                                   ),
                                 ),
+                                if (_showPickupOtp) ...[
+                                  const SizedBox(height: 16),
+                                  _pickupOtpCard(),
+                                ],
                                 if (driverName.isNotEmpty) ...[
                                   const SizedBox(height: 16),
                                   Container(

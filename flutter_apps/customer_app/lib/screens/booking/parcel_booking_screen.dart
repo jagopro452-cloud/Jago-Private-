@@ -917,69 +917,69 @@ class _ParcelBookingScreenState extends State<ParcelBookingScreen>
   Widget _buildNewHeader() {
     return Container(
       width: double.infinity,
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          colors: [logisticsOrange, Color(0xFFD6B58F)],
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFFB8834D), logisticsOrange, Color(0xFFDDBD94)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
+        boxShadow: [
+          BoxShadow(
+            color: logisticsOrange.withValues(alpha: 0.22),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
       ),
       child: SafeArea(
         bottom: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(8, 0, 16, 6),
-          child: Column(
-            children: [
-              Row(children: [
-                IconButton(
-                  icon: const Icon(Icons.arrow_back_rounded, color: Colors.white, size: 22),
-                  onPressed: _back,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      JT.logoWhite(height: 36),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Parcel Delivery',
-                        style: GoogleFonts.poppins(
-                          color: Colors.white.withValues(alpha: 0.9),
-                          fontSize: 15,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
+          padding: const EdgeInsets.fromLTRB(8, 0, 20, 18),
+          child: Row(children: [
+            Material(
+              color: Colors.white.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(12),
+              child: IconButton(
+                icon: const Icon(Icons.arrow_back_rounded, color: Colors.white, size: 20),
+                onPressed: _back,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.inventory_2_rounded, color: Colors.white, size: 20),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Parcel Delivery',
+                    style: GoogleFonts.poppins(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.25),
-                    borderRadius: BorderRadius.circular(20),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Door-to-door, OTP-verified',
+                    style: GoogleFonts.poppins(
+                      color: Colors.white.withValues(alpha: 0.85),
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w400,
+                    ),
                   ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.inventory_2_rounded, color: Colors.white, size: 14),
-                      const SizedBox(width: 6),
-                      Text(
-                        'Logistics',
-                        style: GoogleFonts.poppins(
-                          color: Colors.white,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ]),
-            ],
-          ),
+                ],
+              ),
+            ),
+          ]),
         ),
       ),
     );
@@ -1089,34 +1089,34 @@ class _ParcelBookingScreenState extends State<ParcelBookingScreen>
               onTap: () => setState(() => _vehicleIdx = idx),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
-                margin: const EdgeInsets.only(bottom: 16),
-                padding: const EdgeInsets.all(12),
+                margin: const EdgeInsets.only(bottom: 14),
+                padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: isSelected ? logisticsOrange.withValues(alpha: 0.03) : Colors.white,
-                  borderRadius: BorderRadius.circular(16),
+                  color: isSelected ? logisticsOrange.withValues(alpha: 0.05) : Colors.white,
+                  borderRadius: BorderRadius.circular(18),
                   border: Border.all(
                     color: isSelected ? logisticsOrange : const Color(0xFFE5E7EB).withValues(alpha: 0.8),
                     width: isSelected ? 1.5 : 1,
                   ),
-                  boxShadow: isSelected 
-                    ? [BoxShadow(color: logisticsOrange.withValues(alpha: 0.1), blurRadius: 10, offset: const Offset(0, 4))]
-                    : [BoxShadow(color: Colors.black.withValues(alpha: 0.02), blurRadius: 4, offset: const Offset(0, 2))],
+                  boxShadow: isSelected
+                    ? [BoxShadow(color: logisticsOrange.withValues(alpha: 0.16), blurRadius: 16, offset: const Offset(0, 6))]
+                    : [BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 6, offset: const Offset(0, 2))],
                 ),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Container(
-                      width: 56,
-                      height: 56,
+                      width: 58,
+                      height: 58,
                       decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
+                        color: v.accentColor.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(14),
                       ),
                       child: Center(
                         child: _buildVehicleImage(v.key),
                       ),
                     ),
-                    const SizedBox(width: 16),
+                    const SizedBox(width: 14),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1210,7 +1210,14 @@ class _ParcelBookingScreenState extends State<ParcelBookingScreen>
               children: [
                 Row(
                   children: [
-                    const Icon(Icons.local_shipping, color: Color(0xFF374151), size: 20),
+                    Container(
+                      width: 32, height: 32,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE5E7EB),
+                        borderRadius: BorderRadius.circular(9),
+                      ),
+                      child: const Icon(Icons.local_shipping, color: Color(0xFF374151), size: 16),
+                    ),
                     const SizedBox(width: 10),
                     Text(
                       'About Jago Logistics',
@@ -1226,7 +1233,7 @@ class _ParcelBookingScreenState extends State<ParcelBookingScreen>
                 _buildInfoPoint(Icons.location_on_outlined, 'Door-to-door parcel delivery'),
                 _buildInfoPoint(Icons.lock_outline, 'OTP-verified secure pickup & delivery'),
                 _buildInfoPoint(Icons.track_changes, 'Live GPS tracking throughout'),
-                _buildInfoPoint(Icons.currency_bitcoin, 'Transparent pricing, no hidden charges'),
+                _buildInfoPoint(Icons.payments_outlined, 'Transparent pricing, no hidden charges'),
               ],
             ),
           ),
@@ -1299,7 +1306,7 @@ class _ParcelBookingScreenState extends State<ParcelBookingScreen>
                         ),
                         child: Row(
                           children: [
-                            const Icon(Icons.remove_circle_outline_rounded, size: 14, color: logisticsOrange),
+                            const Icon(Icons.my_location_rounded, size: 14, color: logisticsOrange),
                             const SizedBox(width: 6),
                             Text('Use Current', style: GoogleFonts.poppins(
                               fontSize: 12, color: logisticsOrange, fontWeight: FontWeight.w600)),
@@ -1759,25 +1766,40 @@ class _ParcelBookingScreenState extends State<ParcelBookingScreen>
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: logisticsOrange.withValues(alpha: 0.05),
+        color: Colors.white,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: logisticsOrange.withValues(alpha: 0.2))),
+        border: Border.all(color: logisticsOrange.withValues(alpha: 0.2)),
+        boxShadow: [BoxShadow(color: logisticsOrange.withValues(alpha: 0.08), blurRadius: 16, offset: const Offset(0, 6))],
+      ),
       child: Column(children: [
-        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Text('Total Bill Amount', style: GoogleFonts.poppins(fontSize: 15, color: const Color(0xFF1F2937))),
-          Text('₹$total', style: GoogleFonts.poppins(
-              fontSize: 24, fontWeight: FontWeight.w700, color: logisticsOrange)),
+        Row(children: [
+          Container(
+            width: 36, height: 36,
+            decoration: BoxDecoration(
+              color: logisticsOrange.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(Icons.receipt_long_rounded, color: logisticsOrange, size: 18),
+          ),
+          const SizedBox(width: 10),
+          Text('Fare Breakdown', style: GoogleFonts.poppins(
+              fontSize: 15, fontWeight: FontWeight.w600, color: const Color(0xFF1F2937))),
+          const Spacer(),
+          Text('${e['distance']} km', style: GoogleFonts.poppins(
+              fontSize: 12.5, fontWeight: FontWeight.w500, color: const Color(0xFF9CA3AF))),
         ]),
-        const Divider(height: 24),
+        const SizedBox(height: 18),
         _fareMiniRow('Base Fare', '₹${e['baseFare'] ?? 0}'),
         _fareMiniRow('Distance Charge', '₹${e['distanceFare'] ?? 0}'),
         _fareMiniRow('Weight Charge', '₹${e['weightFare'] ?? 0}'),
         if ((e['loadingCharge'] ?? 0) > 0)
           _fareMiniRow('Loading Charge', '₹${e['loadingCharge']}'),
-        const Divider(height: 24),
+        const Divider(height: 28),
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Text('Distance', style: GoogleFonts.poppins(fontSize: 13, color: const Color(0xFF6B7280))),
-          Text('${e['distance']} km', style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w600)),
+          Text('Total Bill Amount', style: GoogleFonts.poppins(
+              fontSize: 15, fontWeight: FontWeight.w600, color: const Color(0xFF1F2937))),
+          Text('₹$total', style: GoogleFonts.poppins(
+              fontSize: 26, fontWeight: FontWeight.w700, color: logisticsOrange)),
         ]),
       ]),
     );
