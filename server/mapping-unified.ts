@@ -817,14 +817,22 @@ export async function getMultiWaypointRoute(
     const optimizeParam = optimize ? "optimize:true|" : "";
 
     const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin.lat},${origin.lng}&destination=${destination.lat},${destination.lng}&waypoints=${optimizeParam}${wpParam}&key=${apiKey}`;
-    const r = await fetch(url, { 
+    const r = await fetch(url, {
       signal: controller.signal,
       headers: { 'Referer': 'https://jagopro.org' }
     });
-    if (!r.ok) return haversineMultiRoute(origin, destination, waypoints);
+    if (!r.ok) {
+      console.error(`[ROUTE] Directions API HTTP ${r.status} ${r.statusText} — falling back to straight-line estimate (no road geometry)`);
+      return haversineMultiRoute(origin, destination, waypoints);
+    }
     const data = await r.json() as any;
 
     if (data?.status !== "OK" || !data.routes?.length) {
+      // This fallback has no polyline geometry at all (see haversineMultiRoute) —
+      // logging the real Google status/error_message here is the only way to
+      // diagnose why road routing silently stops working, since the app-facing
+      // response still returns HTTP 200.
+      console.error(`[ROUTE] Directions API status=${data?.status} error_message=${data?.error_message || '(none)'} — falling back to straight-line estimate (no road geometry)`);
       return haversineMultiRoute(origin, destination, waypoints);
     }
 
@@ -1008,9 +1016,15 @@ export async function searchNearbyPlaces(
   try {
     const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${lat},${lng}&radius=${radius}&type=${encodeURIComponent(type)}&key=${apiKey}`;
     const r = await fetch(url, { signal: controller.signal });
-    if (!r.ok) return [];
+    if (!r.ok) {
+      console.error(`[PLACES] Nearby Search API HTTP ${r.status} ${r.statusText}`);
+      return [];
+    }
     const data = await r.json() as any;
-    if (data?.status !== "OK") return [];
+    if (data?.status !== "OK") {
+      console.error(`[PLACES] Nearby Search API status=${data?.status} error_message=${data?.error_message || '(none)'}`);
+      return [];
+    }
 
     return (data.results || []).slice(0, 15).map((p: any) => ({
       name: p.name || "",

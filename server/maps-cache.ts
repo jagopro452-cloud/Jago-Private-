@@ -318,14 +318,20 @@ export async function getRouteWithCache(
 
   try {
     const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${originLat},${originLng}&destination=${destLat},${destLng}&key=${apiKey}`;
-    const r = await fetch(url, { 
+    const r = await fetch(url, {
       signal: controller.signal,
       headers: { 'Referer': 'https://jagopro.org' }
     });
-    if (!r.ok) return null;
+    if (!r.ok) {
+      console.error(`[ROUTE] getRouteWithCache Directions API HTTP ${r.status} ${r.statusText}`);
+      return null;
+    }
     const data = await r.json() as any;
 
-    if (data?.status !== "OK" || !data.routes?.length) return null;
+    if (data?.status !== "OK" || !data.routes?.length) {
+      console.error(`[ROUTE] getRouteWithCache Directions API status=${data?.status} error_message=${data?.error_message || '(none)'}`);
+      return null;
+    }
 
     const route = data.routes[0];
     const leg = route.legs?.[0];
