@@ -633,14 +633,22 @@ function camelize(obj: any): any {
 function formatDbError(err: any): string {
   if (!err) return "Unknown error";
   if (typeof err === "string") return err;
-  if (err.message && typeof err.message === "string" && err.message.trim().length > 0) return err.message;
+  // Drizzle wraps query failures as `err.message = "Failed query: ...\nparams: ..."`
+  // with the actual driver/Postgres error (constraint name, missing column, etc.)
+  // only on `err.cause.message` — returning err.message alone hides the real
+  // reason behind the query text every time, which cost real debugging time
+  // tracing a "does not exist" column error that was silently swallowed here.
+  const own = err.message && typeof err.message === "string" && err.message.trim().length > 0 ? err.message : "";
+  const cause = err.cause?.message && typeof err.cause.message === "string" ? err.cause.message : "";
+  if (own && cause && !own.includes(cause)) return `${cause} | ${own}`;
+  if (own) return own;
+  if (cause) return cause;
   if (Array.isArray(err.errors) && err.errors.length > 0) {
     return err.errors
       .map((sub: any) => sub?.message || `${sub?.code || "ERR"} ${sub?.address || ""}:${sub?.port || ""}`.trim())
       .filter(Boolean)
       .join(" | ");
   }
-  if (err.cause?.message && typeof err.cause.message === "string") return err.cause.message;
   try {
     return JSON.stringify(err);
   } catch {
@@ -648,12 +656,14 @@ function formatDbError(err: any): string {
   }
 }
 
-// sql`${array}` renders a JS array as a parenthesized comma list (for IN
-// clauses), not a Postgres array literal — `(${arr})::text[]` is invalid
-// syntax. Build a real ARRAY[...] literal instead so it can be cast to text[].
-function sqlTextArray(values: string[]) {
-  if (!values.length) return rawSql`ARRAY[]::text[]`;
-  return rawSql`ARRAY[${rawSql.join(values.map((v) => rawSql`${v}`), rawSql`, `)}]::text[]`;
+// driver_details.service_eligibility is jsonb in production (confirmed via
+// \d driver_details — NOT text[] like the checked-in baseline migration
+// claims), so it must be written as a JSON array literal, not a Postgres
+// array. sql`${array}` also can't do the latter directly anyway: it renders
+// a JS array as a parenthesized comma list (for IN clauses), so
+// `${arr}::text[]` would render as the invalid `(${arr})::text[]`.
+function sqlJsonArray(values: string[]) {
+  return rawSql`${JSON.stringify(values)}::jsonb`;
 }
 
 /** dbCatch ï¿½ logs DB errors instead of silently swallowing them. Use in place of .catch(dbCatch("db")). */
@@ -14393,11 +14403,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             )
             VALUES (
               ${user.id}::uuid, ${vehicleCategoryId}::uuid, 'offline', false, 0,
-              5.0, 'pending', ${sqlTextArray(serviceEligibility)}, ${canCarryParcel}, now()
+              5.0, 'pending', ${sqlJsonArray(serviceEligibility)}, ${canCarryParcel}, now()
             )
             ON CONFLICT (user_id) DO UPDATE SET
               vehicle_category_id = ${vehicleCategoryId}::uuid,
-              service_eligibility = ${sqlTextArray(serviceEligibility)},
+              service_eligibility = ${sqlJsonArray(serviceEligibility)},
               parcel_eligibility = ${canCarryParcel},
               approval_state = COALESCE(NULLIF(driver_details.approval_state, ''), 'pending'),
               updated_at = now()
@@ -14790,14 +14800,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const seatCapacity = seatCapacityRaw === undefined || seatCapacityRaw === null || seatCapacityRaw === ""
         ? null
         : Math.max(1, Number(seatCapacityRaw) || 1);
-      const serviceEligibilitySql = serviceEligibility === null ? null : sqlTextArray(serviceEligibility);
+      const serviceEligibilityJson = serviceEligibility === null ? null : sqlJsonArray(serviceEligibility);
 
       await rawDb.execute(rawSql`
         INSERT INTO driver_details (user_id, approval_state, service_eligibility, parcel_eligibility, pool_eligibility, outstation_eligibility, seat_capacity, updated_at)
         VALUES (
           ${driverId}::uuid,
           'pending',
-          COALESCE(${serviceEligibilitySql}::text[], '{}'::text[]),
+          COALESCE(${serviceEligibilityJson}::jsonb, '[]'::jsonb),
           COALESCE(${parcelEligibility}::boolean, false),
           COALESCE(${poolEligibility}::boolean, false),
           COALESCE(${outstationEligibility}::boolean, false),
@@ -14805,7 +14815,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           NOW()
         )
         ON CONFLICT (user_id) DO UPDATE SET
-          service_eligibility = COALESCE(${serviceEligibilitySql}::text[], driver_details.service_eligibility),
+          service_eligibility = COALESCE(${serviceEligibilityJson}::jsonb, driver_details.service_eligibility),
           parcel_eligibility = COALESCE(${parcelEligibility}::boolean, driver_details.parcel_eligibility),
           pool_eligibility = COALESCE(${poolEligibility}::boolean, driver_details.pool_eligibility),
           outstation_eligibility = COALESCE(${outstationEligibility}::boolean, driver_details.outstation_eligibility),

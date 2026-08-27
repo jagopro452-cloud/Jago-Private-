@@ -115,6 +115,13 @@ export async function ensureBootstrapSchema() {
   await pool.query(`
     ALTER TABLE driver_details ADD COLUMN IF NOT EXISTS car_share_enabled BOOLEAN DEFAULT false
   `).catch(logBootstrapStepError("driver_details.car_share_enabled"));
+  // Pre-existing gap: update-registration's driver_details upsert writes
+  // updated_at=now(), but the live production table never had this column —
+  // every registration submit that included a vehicleType failed outright
+  // with "column \"updated_at\" of relation \"driver_details\" does not exist".
+  await pool.query(`
+    ALTER TABLE driver_details ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()
+  `).catch(logBootstrapStepError("driver_details.updated_at"));
   // Pre-existing gap: /pool/cancel writes cancel_reason/refund_amount/
   // cancelled_at, but the original pool_ride_requests CREATE TABLE never
   // included them — cancelling a Car Share booking was failing with
