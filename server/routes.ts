@@ -3534,7 +3534,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             ${search ? rawSql`AND (full_name ILIKE ${"%" + search + "%"} OR email ILIKE ${"%" + search + "%"} OR phone ILIKE ${"%" + search + "%"})` : rawSql``}
             ${typeof activeFilter === "boolean" ? rawSql`AND is_active = ${activeFilter}` : rawSql``}
         `);
-        return res.json({ ...result, summary: camelize(summaryRows.rows[0] || {}) });
+        // The driver app writes uploaded KYC/registration documents (DL, RC,
+        // insurance, selfie, vehicle photo) into driver_documents — not into
+        // the legacy users.license_image/vehicle_image/profile_image columns
+        // this list otherwise renders. Without this, the admin Drivers page
+        // shows "no documents" for every driver who registered through the
+        // app, even though the uploads succeeded and are visible on the
+        // separate Driver Verification page.
+        const dataWithDocs = await Promise.all((result.data as any[]).map(async (d: any) => ({
+          ...d,
+          documents: await getDriverDocumentsForResponse(String(d.id)),
+        })));
+        return res.json({ ...result, data: dataWithDocs, summary: camelize(summaryRows.rows[0] || {}) });
       }
       res.json(result);
     } catch (e: any) {

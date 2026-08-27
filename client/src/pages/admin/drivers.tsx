@@ -15,6 +15,11 @@ const VSTATUS: Record<string, { label: string; cls: string; color: string }> = {
   approved: { label: "Approved", cls: "badge bg-success", color: "#16a34a" },
   rejected: { label: "Rejected", cls: "badge bg-danger", color: "#dc2626" },
 };
+const DOC_TYPE_LABELS: Record<string, string> = {
+  dl_front: "DL Front", dl_back: "DL Back", rc: "RC", insurance: "Insurance",
+  selfie: "Selfie", vehicle_photo: "Vehicle Photo",
+  aadhar_front: "Aadhaar Front", aadhar_back: "Aadhaar Back", puc: "PUC",
+};
 
 // ── Verify Modal ──────────────────────────────────────────────────────────────
 function VerifyModal({ driver, open, onClose }: { driver: any; open: boolean; onClose: () => void }) {
@@ -157,7 +162,34 @@ function VerifyModal({ driver, open, onClose }: { driver: any; open: boolean; on
 
           {/* Right: document images */}
           <div style={{ flex: 1, padding: "18px 16px", overflowY: "auto" }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 14 }}>Document Uploads</div>
+            {Array.isArray(driver.documents) && driver.documents.length > 0 && (
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 14 }}>
+                  Uploaded by Driver ({driver.documents.filter((d: any) => d.fileUrl).length})
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                  {driver.documents.filter((d: any) => d.fileUrl).map((d: any) => (
+                    <a key={d.docType} href={d.fileUrl} target="_blank" rel="noopener noreferrer"
+                      style={{ display: "block", textDecoration: "none", color: "inherit" }}
+                      data-testid={`link-uploaded-doc-${d.docType}`}>
+                      <div style={{ aspectRatio: "16/10", borderRadius: 10, overflow: "hidden", background: "#f1f5f9", border: "1px solid #e2e8f0" }}>
+                        <img src={d.fileUrl} style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                          onError={e => { (e.target as HTMLImageElement).style.opacity = "0.2"; }} />
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 4 }}>
+                        <span style={{ fontSize: 11, fontWeight: 600 }}>{DOC_TYPE_LABELS[d.docType] || d.docType}</span>
+                        <span style={{ fontSize: 9, textTransform: "uppercase", fontWeight: 700,
+                          color: d.status === "approved" ? "#16a34a" : d.status === "rejected" ? "#dc2626" : "#d97706" }}>
+                          {d.status || "pending"}
+                        </span>
+                      </div>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 14 }}>Manual Document Override</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
               <ImageUploader label="🪪 Driving License" value={docs.licenseImage}
                 onChange={url => handleDocChange("licenseImage", url)} testId="license" />
@@ -168,13 +200,17 @@ function VerifyModal({ driver, open, onClose }: { driver: any; open: boolean; on
             {/* Document checklist */}
             <div style={{ marginTop: 20, background: "#f8fafc", borderRadius: 12, padding: 14 }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 10 }}>Verification Checklist</div>
-              {[
-                { label: "License Number", ok: !!docs.licenseNumber },
-                { label: "License Photo", ok: !!docs.licenseImage },
-                { label: "Vehicle Number", ok: !!docs.vehicleNumber },
-                { label: "Vehicle Photo", ok: !!docs.vehicleImage },
-                { label: "Profile Photo", ok: !!docs.profileImage },
-              ].map(({ label, ok }) => (
+              {(() => {
+                const uploaded = new Set((driver.documents || []).filter((d: any) => d.fileUrl).map((d: any) => d.docType));
+                return [
+                  { label: "License Number", ok: !!docs.licenseNumber },
+                  { label: "License Photo", ok: !!docs.licenseImage || uploaded.has("dl_front") || uploaded.has("dl_back") },
+                  { label: "Vehicle Number", ok: !!docs.vehicleNumber },
+                  { label: "Vehicle Photo", ok: !!docs.vehicleImage || uploaded.has("vehicle_photo") },
+                  { label: "Profile Photo", ok: !!docs.profileImage || uploaded.has("selfie") },
+                  { label: "RC / Insurance", ok: uploaded.has("rc") || uploaded.has("insurance") },
+                ];
+              })().map(({ label, ok }) => (
                 <div key={label} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                   <i className={`bi ${ok ? "bi-check-circle-fill text-success" : "bi-circle text-muted"}`} style={{ fontSize: 14 }}></i>
                   <span style={{ fontSize: 12, color: ok ? "#16a34a" : "#94a3b8", fontWeight: ok ? 600 : 400 }}>{label}</span>
@@ -467,7 +503,13 @@ export default function Drivers() {
                 ) : drivers.map((driver: any, idx: number) => {
                   const name = driver.fullName || `${driver.firstName || ""} ${driver.lastName || ""}`.trim() || "Driver";
                   const vs = VSTATUS[driver.verificationStatus || "pending"] || VSTATUS.pending;
-                  const docsCount = [driver.licenseImage, driver.vehicleImage, driver.profileImage, driver.licenseNumber, driver.vehicleNumber].filter(Boolean).length;
+                  const uploadedDocTypes = new Set((driver.documents || []).filter((d: any) => d.fileUrl).map((d: any) => d.docType));
+                  const docsCount = uploadedDocTypes.size > 0
+                    ? uploadedDocTypes.size
+                    : [driver.licenseImage, driver.vehicleImage, driver.profileImage, driver.licenseNumber, driver.vehicleNumber].filter(Boolean).length;
+                  const docsTotal = uploadedDocTypes.size > 0 ? 6 : 5;
+                  const selfieDoc = (driver.documents || []).find((d: any) => d.docType === "selfie" && d.fileUrl);
+                  const avatarImage = selfieDoc?.fileUrl || driver.profileImage;
                   return (
                     <tr key={driver.id} data-testid={`row-driver-${driver.id}`}>
                       <td className="ps-4 text-muted small">{(page - 1) * 50 + idx + 1}</td>
@@ -475,8 +517,8 @@ export default function Drivers() {
                         <div className="d-flex align-items-center gap-2">
                           <div className="rounded-circle d-flex align-items-center justify-content-center flex-shrink-0 position-relative"
                             style={{ width: 38, height: 38, background: avatarBg(name), color: "white", fontSize: 13, fontWeight: 700 }}>
-                            {driver.profileImage ? (
-                              <img src={driver.profileImage} style={{ width: 38, height: 38, borderRadius: "50%", objectFit: "cover" }}
+                            {avatarImage ? (
+                              <img src={avatarImage} style={{ width: 38, height: 38, borderRadius: "50%", objectFit: "cover" }}
                                 onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
                             ) : initials(name)}
                           </div>
@@ -500,9 +542,9 @@ export default function Drivers() {
                       <td>
                         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                           <div style={{ width: 60, height: 5, background: "#f1f5f9", borderRadius: 4, overflow: "hidden" }}>
-                            <div style={{ height: "100%", width: `${(docsCount / 5) * 100}%`, background: docsCount >= 4 ? "#16a34a" : docsCount >= 2 ? "#d97706" : "#ef4444", borderRadius: 4 }} />
+                            <div style={{ height: "100%", width: `${(docsCount / docsTotal) * 100}%`, background: docsCount >= docsTotal - 1 ? "#16a34a" : docsCount >= 2 ? "#d97706" : "#ef4444", borderRadius: 4 }} />
                           </div>
-                          <span style={{ fontSize: 10, color: "#64748b" }}>{docsCount}/5</span>
+                          <span style={{ fontSize: 10, color: "#64748b" }}>{docsCount}/{docsTotal}</span>
                         </div>
                       </td>
                       <td>
