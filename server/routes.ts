@@ -7342,6 +7342,35 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.patch("/api/drivers/:id/verify", requireAdminAuth, async (req, res) => {
     try {
       const { status, note, licenseNumber, vehicleNumber, vehicleModel } = req.body;
+      // A driver cannot be marked approved without a working dispatch profile —
+      // otherwise the admin UI shows "Approved" while the driver is silently
+      // invisible to ride matching (confirmed in production: drivers approved
+      // without ever completing in-app vehicle registration end up with no
+      // driver_details row at all, or one with no active vehicle_category_id).
+      // Rejection is never blocked by this — only approval requires it.
+      if (status === "approved") {
+        const profileR = await rawDb.execute(rawSql`
+          SELECT dd.vehicle_category_id, vc.id AS category_id, vc.is_active AS category_active,
+                 vc.vehicle_type, vc.service_type
+          FROM driver_details dd
+          LEFT JOIN vehicle_categories vc ON vc.id = dd.vehicle_category_id
+          WHERE dd.user_id = ${String(req.params.id)}::uuid
+        `).catch(dbCatchRows("db"));
+        const profile = profileR.rows[0] as any;
+        const profileIncomplete =
+          !profile ||
+          !profile.vehicle_category_id ||
+          !profile.category_id ||
+          profile.category_active !== true ||
+          !profile.vehicle_type ||
+          !profile.service_type;
+        if (profileIncomplete) {
+          return res.status(409).json({
+            message: "Cannot approve — this driver has not completed vehicle registration (no vehicle category is assigned, or the assigned category is missing/inactive). Ask the driver to complete vehicle setup in the app, then try approving again.",
+            code: "DRIVER_PROFILE_INCOMPLETE",
+          });
+        }
+      }
       const updateData: any = { verificationStatus: status };
       if (note) updateData.rejectionNote = note;
       if (licenseNumber) updateData.licenseNumber = licenseNumber;
@@ -7349,6 +7378,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (vehicleModel) updateData.vehicleModel = vehicleModel;
       if (status === "approved") updateData.isActive = true;
       await storage.updateUser(String(req.params.id), updateData);
+      // Keep driver_details.approval_state (the field dispatch eligibility
+      // actually gates on) in sync with the verification decision made here —
+      // previously this endpoint only updated `users`, leaving newly
+      // registered drivers stuck at approval_state='pending' forever even
+      // after being "verified", so they never appeared in ride dispatch.
+      if (status === "approved" || status === "rejected") {
+        await rawDb.execute(rawSql`
+          UPDATE driver_details SET approval_state=${status} WHERE user_id=${String(req.params.id)}::uuid
+        `).catch(dbCatch("db"));
+      }
       res.json({ success: true, status });
     } catch (e: any) { res.status(500).json({ message: safeErrMsg(e) }); }
   });
@@ -8805,21 +8844,46 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const lat = req.body.lat;
       const lng = req.body.lng;
       const hasValidCoords = lat != null && lng != null && isFinite(Number(lat)) && isFinite(Number(lng)) && (Number(lat) !== 0 || Number(lng) !== 0);
-      await rawDb.execute(rawSql`UPDATE users SET is_online=${isOnline} WHERE id=${driver.id}::uuid`);
-      // UPSERT driver_locations ï¿½ only update lat/lng if we have a real GPS fix; never write 0,0
-      if (hasValidCoords) {
-        await rawDb.execute(rawSql`
-          INSERT INTO driver_locations (driver_id, lat, lng, is_online, updated_at)
-          VALUES (${driver.id}::uuid, ${Number(lat)}, ${Number(lng)}, ${isOnline}, NOW())
-          ON CONFLICT (driver_id) DO UPDATE SET lat=${Number(lat)}, lng=${Number(lng)}, is_online=${isOnline}, updated_at=NOW()
+      const availabilityStatus = isOnline ? 'online' : 'offline';
+      // users.is_online, driver_locations.is_online, and driver_details's
+      // (is_online, availability_status) mirror are three separate columns
+      // that must all move together — previously only the first two were
+      // written here, so driver_details silently stayed stuck at
+      // is_online=false/availability_status='offline' forever. The main
+      // ride-dispatch query (findEligibleDriversForDispatch) gates on
+      // driver_locations.is_online, but the AI driver-matching endpoint
+      // (findBestDrivers) and local-pool dispatch both gate on
+      // driver_details.availability_status — leaving it stale silently
+      // broke those paths even though the driver looked "online" everywhere
+      // else. All three writes happen in one transaction so they can never
+      // drift out of sync with each other again.
+      await rawDb.transaction(async (tx) => {
+        await tx.execute(rawSql`UPDATE users SET is_online=${isOnline} WHERE id=${driver.id}::uuid`);
+        // UPSERT driver_locations ï¿½ only update lat/lng if we have a real GPS fix; never write 0,0
+        if (hasValidCoords) {
+          await tx.execute(rawSql`
+            INSERT INTO driver_locations (driver_id, lat, lng, is_online, updated_at)
+            VALUES (${driver.id}::uuid, ${Number(lat)}, ${Number(lng)}, ${isOnline}, NOW())
+            ON CONFLICT (driver_id) DO UPDATE SET lat=${Number(lat)}, lng=${Number(lng)}, is_online=${isOnline}, updated_at=NOW()
+          `);
+        } else {
+          await tx.execute(rawSql`
+            INSERT INTO driver_locations (driver_id, lat, lng, is_online, updated_at)
+            VALUES (${driver.id}::uuid, 0, 0, ${isOnline}, NOW())
+            ON CONFLICT (driver_id) DO UPDATE SET is_online=${isOnline}, updated_at=NOW()
+          `);
+        }
+        // UPDATE-only, never INSERT/upsert: a driver with no driver_details
+        // row (incomplete registration) must stay that way — going online
+        // must never manufacture a dispatch profile that bypasses the
+        // vehicle-registration completeness guarantee added separately.
+        // If the row doesn't exist this matches zero rows and is a no-op.
+        await tx.execute(rawSql`
+          UPDATE driver_details
+          SET is_online=${isOnline}, availability_status=${availabilityStatus}, updated_at=NOW()
+          WHERE user_id=${driver.id}::uuid
         `);
-      } else {
-        await rawDb.execute(rawSql`
-          INSERT INTO driver_locations (driver_id, lat, lng, is_online, updated_at)
-          VALUES (${driver.id}::uuid, 0, 0, ${isOnline}, NOW())
-          ON CONFLICT (driver_id) DO UPDATE SET is_online=${isOnline}, updated_at=NOW()
-        `);
-      }
+      });
       res.json({ success: true, isOnline });
     } catch (e: any) { res.status(500).json({ message: safeErrMsg(e) }); }
   });
@@ -14244,67 +14308,93 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         ...(rideServiceKey ? [rideServiceKey] : []),
         ...(canCarryParcel ? ['parcel_delivery'] : []),
       ];
-      const categoryR = canonicalVehicleType ? await rawDb.execute(rawSql`
-        SELECT id
-        FROM vehicle_categories
-        WHERE is_active = true
-          AND service_type = 'ride'
-          AND (
-            vehicle_type = ${canonicalVehicleType}
-            OR LOWER(name) = ${canonicalVehicleType.replace(/_/g, ' ')}
-          )
-        ORDER BY name
-        LIMIT 1
-      `).catch(() => ({ rows: [] as any[] })) : { rows: [] as any[] };
-      const vehicleCategoryId = categoryR.rows[0]?.id || null;
-      await rawDb.execute(rawSql`
-        UPDATE users SET
-          full_name = COALESCE(${fullName || null}, full_name),
-          date_of_birth = COALESCE(${dateOfBirth || null}, date_of_birth),
-          city = COALESCE(${city || null}, city),
-          vehicle_brand = COALESCE(${vehicleBrand || null}, vehicle_brand),
-          vehicle_color = COALESCE(${vehicleColor || null}, vehicle_color),
-          vehicle_year = COALESCE(${vehicleYear || null}, vehicle_year),
-          license_number = COALESCE(${licenseNumber || null}, license_number),
-          license_expiry = COALESCE(${licenseExpiry || null}, license_expiry),
-          vehicle_number = COALESCE(${vehicleNumber || null}, vehicle_number),
-          vehicle_model = COALESCE(${vehicleModel || null}, vehicle_model),
-          gender = COALESCE(${driverGender || null}, gender),
-          selfie_image = COALESCE(${selfieImage || null}, selfie_image),
-          password_hash = COALESCE(${passwordHash || null}, password_hash),
-          verification_status = CASE WHEN user_type='driver' AND verification_status NOT IN ('approved', 'rejected') THEN 'pending' ELSE verification_status END,
-          onboard_date = COALESCE(onboard_date, now()),
-          updated_at = now()
-        WHERE id = ${user.id}::uuid
-      `);
+
+      // A submitted vehicleType MUST resolve to a real, active ride category
+      // before anything is written — previously an unresolvable type silently
+      // wrote vehicle_category_id=NULL and still reported success, which is
+      // how drivers ended up "registered" with no working dispatch profile.
+      let vehicleCategoryId: string | null = null;
       if (vehicleType) {
-        await rawDb.execute(rawSql`
-          INSERT INTO driver_details (
-            user_id, vehicle_category_id, availability_status, is_online, total_trips,
-            avg_rating, approval_state, service_eligibility, parcel_eligibility, updated_at
-          )
-          SELECT
-            ${user.id}::uuid, ${vehicleCategoryId}::uuid, 'offline', false, 0,
-            5.0, 'pending', ${serviceEligibility}::text[], ${canCarryParcel}, now()
-          WHERE NOT EXISTS (
-            SELECT 1 FROM driver_details WHERE user_id = ${user.id}::uuid
-          )
-        `).catch(dbCatch("db"));
-        await rawDb.execute(rawSql`
-          UPDATE driver_details SET
-            vehicle_category_id = COALESCE(${vehicleCategoryId}::uuid, driver_details.vehicle_category_id),
-            service_eligibility = CASE
-              WHEN array_length(${serviceEligibility}::text[], 1) IS NULL THEN driver_details.service_eligibility
-              ELSE ${serviceEligibility}::text[]
-            END,
-            parcel_eligibility = ${canCarryParcel},
-            approval_state = COALESCE(NULLIF(driver_details.approval_state, ''), 'pending'),
-            updated_at = now()
-          WHERE user_id = ${user.id}::uuid
-        `).catch(dbCatch("db"));
+        if (!rideServiceByVehicle[canonicalVehicleType]) {
+          return res.status(400).json({
+            message: `Unsupported vehicle type "${vehicleType}"`,
+            code: "INVALID_VEHICLE_TYPE",
+          });
+        }
+        const categoryR = await rawDb.execute(rawSql`
+          SELECT id
+          FROM vehicle_categories
+          WHERE is_active = true
+            AND service_type = 'ride'
+            AND (
+              vehicle_type = ${canonicalVehicleType}
+              OR LOWER(name) = ${canonicalVehicleType.replace(/_/g, ' ')}
+            )
+          ORDER BY name
+          LIMIT 1
+        `);
+        vehicleCategoryId = (categoryR.rows[0] as any)?.id || null;
+        if (!vehicleCategoryId) {
+          return res.status(409).json({
+            message: `No active "${canonicalVehicleType}" vehicle category is configured. Contact support.`,
+            code: "VEHICLE_CATEGORY_NOT_CONFIGURED",
+          });
+        }
       }
+
+      // users profile fields + driver_details vehicle mapping are persisted
+      // atomically — either both succeed or neither does. Errors propagate
+      // out of the transaction to the outer catch below instead of being
+      // swallowed, so a failed driver_details write now fails the request
+      // instead of silently returning success with no dispatch profile.
+      await rawDb.transaction(async (tx) => {
+        await tx.execute(rawSql`
+          UPDATE users SET
+            full_name = COALESCE(${fullName || null}, full_name),
+            date_of_birth = COALESCE(${dateOfBirth || null}, date_of_birth),
+            city = COALESCE(${city || null}, city),
+            vehicle_brand = COALESCE(${vehicleBrand || null}, vehicle_brand),
+            vehicle_color = COALESCE(${vehicleColor || null}, vehicle_color),
+            vehicle_year = COALESCE(${vehicleYear || null}, vehicle_year),
+            license_number = COALESCE(${licenseNumber || null}, license_number),
+            license_expiry = COALESCE(${licenseExpiry || null}, license_expiry),
+            vehicle_number = COALESCE(${vehicleNumber || null}, vehicle_number),
+            vehicle_model = COALESCE(${vehicleModel || null}, vehicle_model),
+            gender = COALESCE(${driverGender || null}, gender),
+            selfie_image = COALESCE(${selfieImage || null}, selfie_image),
+            password_hash = COALESCE(${passwordHash || null}, password_hash),
+            verification_status = CASE WHEN user_type='driver' AND verification_status NOT IN ('approved', 'rejected') THEN 'pending' ELSE verification_status END,
+            onboard_date = COALESCE(onboard_date, now()),
+            updated_at = now()
+          WHERE id = ${user.id}::uuid
+        `);
+        if (vehicleType) {
+          // Single idempotent upsert (driver_details.user_id is UNIQUE) —
+          // replaces the old separate INSERT-if-missing + UPDATE pair so a
+          // retried request can never race itself into a duplicate row.
+          await tx.execute(rawSql`
+            INSERT INTO driver_details (
+              user_id, vehicle_category_id, availability_status, is_online, total_trips,
+              avg_rating, approval_state, service_eligibility, parcel_eligibility, updated_at
+            )
+            VALUES (
+              ${user.id}::uuid, ${vehicleCategoryId}::uuid, 'offline', false, 0,
+              5.0, 'pending', ${serviceEligibility}::text[], ${canCarryParcel}, now()
+            )
+            ON CONFLICT (user_id) DO UPDATE SET
+              vehicle_category_id = ${vehicleCategoryId}::uuid,
+              service_eligibility = ${serviceEligibility}::text[],
+              parcel_eligibility = ${canCarryParcel},
+              approval_state = COALESCE(NULLIF(driver_details.approval_state, ''), 'pending'),
+              updated_at = now()
+          `);
+        }
+      });
       res.json({ success: true, message: "Profile updated" });
-    } catch (e: any) { res.status(500).json({ message: safeErrMsg(e) }); }
+    } catch (e: any) {
+      console.error("[update-registration] failed:", formatDbError(e));
+      res.status(500).json({ message: safeErrMsg(e) });
+    }
   });
 
   // -- DRIVER: Get verification status (full detail) --------------------------

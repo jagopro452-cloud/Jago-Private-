@@ -653,6 +653,86 @@ export async function findEligibleDriversForDispatch(input: {
     console.log(
       `[DISPATCH_DEBUG] trip=${requirements.tripId} strict-sql candidates=${(candidates.rows as any[]).length} radius=${radiusKm} service=${requirements.platformServiceKey || "unknown"} category=${requirements.vehicleCategoryId || "any"} strictIds=${safeStrictCategoryIds.join(",") || "none"}`,
     );
+
+    // ---- TEMPORARY per-driver diagnostic (Satya investigation) --------------
+    // Explains EVERY nearby driver — not just ones that made it into `candidates`
+    // above — by reusing the exact same buildProfileFromCandidateRow() /
+    // checkProfileEligibility() gates the real dispatch decision uses, so this
+    // can never disagree with the actual outcome. Read-only, wrapped in its own
+    // try/catch so a diagnostic failure can never affect the real driver list
+    // returned below. Safe to delete this block once the investigation is closed.
+    try {
+      const diagPool = await rawDb.execute(rawSql`
+        SELECT
+          u.id, u.full_name, u.phone, u.rating, u.city, u.gender,
+          u.is_active, u.is_locked, u.current_trip_id, u.verification_status, u.is_online,
+          dl.is_online as dl_online, dl.lat, dl.lng, dl.updated_at,
+          EXTRACT(EPOCH FROM (NOW() - dl.updated_at))::int as location_age_seconds,
+          dd.vehicle_category_id as vehicle_category_id,
+          COALESCE(dd.vehicle_subcategory, '') as vehicle_subcategory,
+          dd.service_eligibility as service_eligibility,
+          dd.parcel_eligibility, dd.pool_eligibility, dd.outstation_eligibility, dd.intercity_eligibility,
+          dd.seat_capacity, COALESCE(dd.approval_state, '') as approval_state,
+          COALESCE(dd.city_eligibility, '{}'::text[]) as city_eligibility,
+          COALESCE(vc.name, '') as vehicle_name,
+          COALESCE(vc.vehicle_type, '') as vehicle_type_code,
+          COALESCE(vc.total_seats, 0) as category_total_seats,
+          COALESCE(vc.is_carpool, false) as category_is_carpool,
+          COALESCE(vc.service_type, '') as category_service_type,
+          COALESCE(ds.total_trips, 0) as total_trips,
+          COALESCE(ds.avg_response_time_sec, 60) as avg_response_time_sec,
+          COALESCE(ds.completion_rate, 0.8) as completion_rate,
+          COALESCE(dbs.overall_score, 50) as behavior_score,
+          SQRT(
+            POW((dl.lat - ${Number(pickupLat)}) * 111.32, 2) +
+            POW((dl.lng - ${Number(pickupLng)}) * 111.32 * COS(RADIANS(${Number(pickupLat)})), 2)
+          ) as distance_km
+        FROM users u
+        JOIN driver_locations dl ON dl.driver_id = u.id
+        LEFT JOIN driver_details dd ON dd.user_id = u.id
+        LEFT JOIN vehicle_categories vc ON vc.id = dd.vehicle_category_id
+        LEFT JOIN driver_stats ds ON ds.driver_id = u.id
+        LEFT JOIN driver_behavior_scores dbs ON dbs.driver_id = u.id
+        WHERE u.user_type = 'driver'
+          AND SQRT(
+            POW((dl.lat - ${Number(pickupLat)}) * 111.32, 2) +
+            POW((dl.lng - ${Number(pickupLng)}) * 111.32 * COS(RADIANS(${Number(pickupLat)})), 2)
+          ) <= ${Math.max(radiusKm, 15)}
+        ORDER BY distance_km ASC
+        LIMIT 20
+      `).catch(() => ({ rows: [] as any[] }));
+
+      const diagRidesModel = await getRidesRevenueModel().catch(() => "commission");
+      for (const drow of diagPool.rows as any[]) {
+        const diagProfile = buildProfileFromCandidateRow(drow);
+        const diagCheck = checkProfileEligibility(diagProfile, requirements, diagRidesModel);
+        let finalEligible = diagCheck.eligible;
+        let exclusionReason: string | null | undefined = diagCheck.eligible ? null : diagCheck.reason;
+        if (diagCheck.eligible && diagCheck.needsSubCheck) {
+          const hasSub = await driverHasActiveSubscription(String((drow as any).id)).catch(() => false);
+          if (!hasSub) { finalEligible = false; exclusionReason = "subscription_required"; }
+        }
+        const inSqlExclude = safeExclude.includes(String((drow as any).id));
+        const reachedSqlCandidates = (candidates.rows as any[]).some((c: any) => String(c.id) === String((drow as any).id));
+        console.log(
+          `[DISPATCH_DIAG] trip=${requirements.tripId} driver_id=${(drow as any).id} ` +
+          `vehicle_category=${(drow as any).vehicle_name || "none"} vehicle_type=${(drow as any).vehicle_type_code || "none"} ` +
+          `requested_vehicle_category=${requirements.vehicleCategoryKey || requirements.platformServiceKey || "any"} ` +
+          `zone=not_used_by_dispatch_matching city=${(drow as any).city || "unknown"} ` +
+          `location_online=${(drow as any).dl_online === true} location_age_sec=${(drow as any).location_age_seconds ?? "n/a"} ` +
+          `is_active=${(drow as any).is_active === true} is_locked=${(drow as any).is_locked === true} current_trip_id=${(drow as any).current_trip_id || "none"} ` +
+          `approval_state=${(drow as any).approval_state || "(none)"} ` +
+          `service_eligibility=${JSON.stringify(diagProfile.serviceEligibility)} ` +
+          `distance_km=${Number((drow as any).distance_km).toFixed(2)} radius_km=${radiusKm} ` +
+          `in_sql_exclude_list=${inSqlExclude} reached_sql_candidates=${reachedSqlCandidates} ` +
+          `FINAL_ELIGIBLE=${finalEligible} EXCLUSION_REASON=${exclusionReason || "none"}`,
+        );
+      }
+    } catch (diagErr: any) {
+      console.error(`[DISPATCH_DIAG] trip=${requirements.tripId} diagnostic block failed (non-fatal, real dispatch unaffected):`, diagErr?.message || diagErr);
+    }
+    // ---- end temporary diagnostic --------------------------------------------
+
     if (!(candidates.rows as any[]).length) {
       const stepCounts = await rawDb.execute(rawSql`
         SELECT
