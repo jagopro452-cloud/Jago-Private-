@@ -648,6 +648,14 @@ function formatDbError(err: any): string {
   }
 }
 
+// sql`${array}` renders a JS array as a parenthesized comma list (for IN
+// clauses), not a Postgres array literal — `(${arr})::text[]` is invalid
+// syntax. Build a real ARRAY[...] literal instead so it can be cast to text[].
+function sqlTextArray(values: string[]) {
+  if (!values.length) return rawSql`ARRAY[]::text[]`;
+  return rawSql`ARRAY[${rawSql.join(values.map((v) => rawSql`${v}`), rawSql`, `)}]::text[]`;
+}
+
 /** dbCatch ï¿½ logs DB errors instead of silently swallowing them. Use in place of .catch(dbCatch("db")). */
 function dbCatch(label: string) {
   return (err: any) => { console.error(`[db:${label}]`, formatDbError(err)); };
@@ -14239,7 +14247,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         mimeType: req.file?.mimetype || null,
       });
       res.json({ success: true, docType, fileUrl: publicUrl, status: 'pending', message: "Document uploaded. Under review." });
-    } catch (e: any) { res.status(500).json({ message: safeErrMsg(e) }); }
+    } catch (e: any) {
+      console.error("[upload-document] failed:", formatDbError(e));
+      res.status(500).json({ message: safeErrMsg(e) });
+    }
   });
 
   // -- DRIVER: Get documents status ------------------------------------------
@@ -14271,7 +14282,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         expiryDate: expiryDate || null,
       });
       res.json({ success: true, docType, fileUrl: publicUrl, status: 'pending', message: "Document uploaded. Under review." });
-    } catch (e: any) { res.status(500).json({ message: safeErrMsg(e) }); }
+    } catch (e: any) {
+      console.error("[upload-document-base64] failed:", formatDbError(e));
+      res.status(500).json({ message: safeErrMsg(e) });
+    }
   });
 
   // -- DRIVER: Update registration profile fields -----------------------------
@@ -14379,11 +14393,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             )
             VALUES (
               ${user.id}::uuid, ${vehicleCategoryId}::uuid, 'offline', false, 0,
-              5.0, 'pending', ${serviceEligibility}::text[], ${canCarryParcel}, now()
+              5.0, 'pending', ${sqlTextArray(serviceEligibility)}, ${canCarryParcel}, now()
             )
             ON CONFLICT (user_id) DO UPDATE SET
               vehicle_category_id = ${vehicleCategoryId}::uuid,
-              service_eligibility = ${serviceEligibility}::text[],
+              service_eligibility = ${sqlTextArray(serviceEligibility)},
               parcel_eligibility = ${canCarryParcel},
               approval_state = COALESCE(NULLIF(driver_details.approval_state, ''), 'pending'),
               updated_at = now()
@@ -14748,13 +14762,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const seatCapacity = seatCapacityRaw === undefined || seatCapacityRaw === null || seatCapacityRaw === ""
         ? null
         : Math.max(1, Number(seatCapacityRaw) || 1);
+      const serviceEligibilitySql = serviceEligibility === null ? null : sqlTextArray(serviceEligibility);
 
       await rawDb.execute(rawSql`
         INSERT INTO driver_details (user_id, approval_state, service_eligibility, parcel_eligibility, pool_eligibility, outstation_eligibility, seat_capacity, updated_at)
         VALUES (
           ${driverId}::uuid,
           'pending',
-          COALESCE(${serviceEligibility}::text[], '{}'::text[]),
+          COALESCE(${serviceEligibilitySql}::text[], '{}'::text[]),
           COALESCE(${parcelEligibility}::boolean, false),
           COALESCE(${poolEligibility}::boolean, false),
           COALESCE(${outstationEligibility}::boolean, false),
@@ -14762,7 +14777,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           NOW()
         )
         ON CONFLICT (user_id) DO UPDATE SET
-          service_eligibility = COALESCE(${serviceEligibility}::text[], driver_details.service_eligibility),
+          service_eligibility = COALESCE(${serviceEligibilitySql}::text[], driver_details.service_eligibility),
           parcel_eligibility = COALESCE(${parcelEligibility}::boolean, driver_details.parcel_eligibility),
           pool_eligibility = COALESCE(${poolEligibility}::boolean, driver_details.pool_eligibility),
           outstation_eligibility = COALESCE(${outstationEligibility}::boolean, driver_details.outstation_eligibility),

@@ -234,10 +234,14 @@ export async function logRideLifecycleEvent(
 export async function loadRealtimeOpsConfig(): Promise<RealtimeOpsConfig> {
   const config = { ...DEFAULT_CONFIG };
   const keys = Object.values(CONFIG_KEY_MAP);
+  // sql`${keys}` renders a JS array as a parenthesized comma list (for IN
+  // clauses), not a Postgres array literal — ANY((...)::text[]) is invalid
+  // syntax, so this silently threw and always fell back to DEFAULT_CONFIG.
+  const keysArray = rawSql`ARRAY[${rawSql.join(keys.map((k) => rawSql`${k}`), rawSql`, `)}]::text[]`;
   const rows = await rawDb.execute(rawSql`
     SELECT key_name, value
     FROM business_settings
-    WHERE key_name = ANY(${keys}::text[])
+    WHERE key_name = ANY(${keysArray})
   `).catch(() => ({ rows: [] as any[] }));
 
   for (const row of rows.rows as any[]) {
