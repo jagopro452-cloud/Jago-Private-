@@ -14710,6 +14710,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             missingDocuments,
           });
         }
+        // Dispatch eligibility keys off driver_details.vehicle_category_id, not
+        // anything on `users` — approving here without a working vehicle
+        // mapping leaves the driver "Approved" in the admin UI but invisible
+        // to ride matching (the exact production incident this guards against).
+        const profileR = await rawDb.execute(rawSql`
+          SELECT dd.vehicle_category_id, vc.id AS category_id, vc.is_active AS category_active
+          FROM driver_details dd
+          LEFT JOIN vehicle_categories vc ON vc.id = dd.vehicle_category_id
+          WHERE dd.user_id = ${driverId}::uuid
+        `).catch(dbCatchRows("db"));
+        const profile = profileR.rows[0] as any;
+        const profileIncomplete = !profile || !profile.vehicle_category_id || !profile.category_id || profile.category_active !== true;
+        if (profileIncomplete) {
+          return res.status(409).json({
+            message: "Cannot approve — this driver has not completed vehicle registration (no vehicle category is assigned, or the assigned category is missing/inactive). Ask the driver to complete vehicle setup in the app, then try approving again.",
+            code: "DRIVER_PROFILE_INCOMPLETE",
+          });
+        }
       }
       await rawDb.execute(rawSql`
         UPDATE users SET
@@ -14719,6 +14737,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           updated_at=NOW()
         WHERE id=${driverId}::uuid AND user_type='driver'
       `);
+      // Keep driver_details.approval_state (the field dispatch eligibility
+      // actually gates on) in sync — this endpoint previously only updated
+      // `users`, so a driver marked "Approved" here stayed stuck at
+      // driver_details.approval_state='pending' forever and never appeared
+      // in ride dispatch despite the admin UI showing them as approved.
+      if (status === 'approved' || status === 'rejected') {
+        await rawDb.execute(rawSql`
+          UPDATE driver_details SET approval_state=${status} WHERE user_id=${driverId}::uuid
+        `).catch(dbCatch("db"));
+      }
       if (status === 'approved') {
         await rawDb.execute(rawSql`UPDATE users SET is_active=true WHERE id=${driverId}::uuid`);
         // Always grant 30-day free period on approval (no subscription/commission for first month)
