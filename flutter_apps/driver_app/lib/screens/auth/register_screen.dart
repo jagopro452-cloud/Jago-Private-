@@ -47,6 +47,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _vehicleYearCtrl = TextEditingController();
   final _vehicleNumCtrl = TextEditingController();
   String _vehicleType = 'bike';
+  bool _carShareEnabled = false;
+  bool _intercityEnabled = false;
 
   // Step 5: Vehicle Documents
   File? _rcPhoto;
@@ -157,6 +159,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
           'vehicleYear': int.tryParse(_vehicleYearCtrl.text.trim()),
           'vehicleNumber': _vehicleNumCtrl.text.trim().toUpperCase(),
           'vehicleType': _vehicleType,
+          'carShareEnabled': _carShareEnabled,
+          'intercityEnabled': _intercityEnabled,
         }),
       );
 
@@ -379,7 +383,69 @@ class _RegisterScreenState extends State<RegisterScreen> {
       _input('Vehicle Number', _vehicleNumCtrl, Icons.numbers),
       const SizedBox(height: 16),
       _dropdown('Vehicle Type', _vehicleType, ['bike', 'auto', 'car', 'mini', 'sedan', 'suv', 'xl'], (v) => setState(() => _vehicleType = v!)),
+      const SizedBox(height: 16),
+      _carShareToggle(),
+      const SizedBox(height: 16),
+      _capabilityToggle(
+        icon: Icons.alt_route_outlined,
+        title: 'Enable Intercity',
+        subtitle:
+            'Allow this vehicle to receive long-distance bookings between cities, where passengers reserve one or more seats or the whole vehicle. You can change this anytime later from your profile.',
+        value: _intercityEnabled,
+        onChanged: (v) => setState(() => _intercityEnabled = v),
+      ),
     ]);
+  }
+
+  Widget _carShareToggle() {
+    return _capabilityToggle(
+      icon: Icons.people_alt_outlined,
+      title: 'Enable Car Share',
+      subtitle:
+          'Allow this vehicle to receive bookings where passengers reserve individual seats, in addition to normal full-vehicle bookings. You can change this anytime later from your profile.',
+      value: _carShareEnabled,
+      onChanged: (v) => setState(() => _carShareEnabled = v),
+    );
+  }
+
+  Widget _capabilityToggle({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: JT.surfaceAlt,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: JT.border),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: JT.primary),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: JT.bodyPrimary.copyWith(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 4),
+                Text(subtitle, style: JT.caption),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Switch(
+            value: value,
+            activeThumbColor: JT.primary,
+            onChanged: onChanged,
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildStep5() {

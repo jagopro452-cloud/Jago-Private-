@@ -1678,6 +1678,37 @@ export function registerRollingPoolRoutes(app: Express, authApp: any, requireAdm
 
   // ─── CUSTOMER: Get booking status ────────────────────────────────────────
 
+  // ─── CUSTOMER: Find my current active Car Share booking (app-resume) ─────
+  // Mirrors the status query below but discovers the booking by customer_id
+  // instead of requiring a known requestId — this is what lets the app find
+  // an in-progress Car Share booking after being closed/reopened, the same
+  // way /api/app/customer/active-trip already does for normal rides.
+  app.get("/api/app/customer/pool/active", authApp, async (req: any, res: any) => {
+    try {
+      const customer = req.currentUser;
+      const r = await rawDb.execute(rawSql`
+        SELECT prr.*,
+          dps.driver_id, u.full_name as driver_name, u.phone as driver_phone,
+          u.vehicle_number, u.vehicle_model, dd.avg_rating,
+          dps.current_lat as driver_lat, dps.current_lng as driver_lng,
+          vc.vehicle_type AS vehicle_category_type, vc.name AS vehicle_category_name
+        FROM pool_ride_requests prr
+        LEFT JOIN driver_pool_sessions dps ON dps.id = prr.session_id
+        LEFT JOIN users u ON u.id = dps.driver_id
+        LEFT JOIN driver_details dd ON dd.user_id = dps.driver_id
+        LEFT JOIN vehicle_categories vc ON vc.id = prr.vehicle_category_id
+        WHERE prr.customer_id = ${customer.id}::uuid
+          AND prr.status IN ('searching', 'pending_driver_accept', 'matched', 'picked_up')
+        ORDER BY prr.created_at DESC
+        LIMIT 1
+      `);
+      if (!r.rows.length) return res.json(poolResponse(true, "POOL_NO_ACTIVE_BOOKING", "No active Car Share booking", { active: false, booking: null }));
+      res.json(poolResponse(true, "POOL_ACTIVE_BOOKING_FOUND", "Active Car Share booking found", { active: true, booking: r.rows[0] }));
+    } catch (e: any) {
+      res.status(500).json(poolResponse(false, "POOL_ACTIVE_FAILED", e.message || "Could not check active Car Share booking", {}, true));
+    }
+  });
+
   app.get("/api/app/customer/pool/status/:requestId", authApp, async (req: any, res: any) => {
     try {
       const customer = req.currentUser;

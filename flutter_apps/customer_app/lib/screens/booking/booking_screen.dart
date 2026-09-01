@@ -731,6 +731,14 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
                 final vtype = (f['type'] ?? f['vehicleType'] ?? '').toString().toLowerCase();
                 // Exclude parcel/cargo vehicles from ride
                 if (vtype == 'parcel' || vname.contains('parcel') || vname.contains('truck') || vname.contains('cargo')) return false;
+                // Car Share / Rolling Pool vehicles must never show up as a
+                // normal-ride option (they need their own booking flow) — the
+                // backend already excludes these, but a name like "Car Share"
+                // or "Carpool" contains "car" and would slip past
+                // _shouldHideVehicle's name-only whitelist below, so check
+                // the actual isCarpool flag directly instead of relying on
+                // the name heuristic for this one.
+                if (f['isCarpool'] == true) return false;
                 // Rule 4: Hide inactive services
                 if (_shouldHideVehicle(vname)) return false;
                 return true;

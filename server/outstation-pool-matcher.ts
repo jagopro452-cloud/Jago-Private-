@@ -299,7 +299,7 @@ export function registerOutstationPoolMatchingRoutes(app: Express, authApp: any)
       }
 
       const catR = await rawDb.execute(rawSql`
-        SELECT dd.vehicle_category_id, vc.is_carpool, vc.service_type, vc.type, vc.vehicle_type, vc.name
+        SELECT dd.vehicle_category_id, dd.intercity_enabled, vc.is_carpool, vc.service_type, vc.type, vc.vehicle_type, vc.name
         FROM driver_details dd
         LEFT JOIN vehicle_categories vc ON vc.id = dd.vehicle_category_id
         WHERE dd.user_id = ${driver.id}::uuid LIMIT 1
@@ -309,6 +309,16 @@ export function registerOutstationPoolMatchingRoutes(app: Express, authApp: any)
         return res.status(403).json({
           message: "Only approved pool-enabled drivers can go available for outstation pool",
           code: "OUTSTATION_POOL_DRIVER_NOT_ELIGIBLE",
+        });
+      }
+      // Intercity is an additional per-driver capability on top of the
+      // category-level pool eligibility above — mirrors car_share_enabled's
+      // role in Rolling Pool. Defaults false, so existing/new drivers never
+      // gain outstation supply eligibility without explicitly opting in.
+      if (category?.intercity_enabled !== true) {
+        return res.status(403).json({
+          message: "Enable Intercity on your vehicle to go available for Outstation Pool",
+          code: "INTERCITY_NOT_ENABLED",
         });
       }
       try {

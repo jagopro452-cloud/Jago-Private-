@@ -457,6 +457,7 @@ class _BookBottomSheet extends StatefulWidget {
 
 class _BookBottomSheetState extends State<_BookBottomSheet> {
   int _seats = 1;
+  bool _wholeCar = false;
   String _paymentMethod = 'cash';
   final _pickupCtrl = TextEditingController();
   final _dropCtrl = TextEditingController();
@@ -470,15 +471,20 @@ class _BookBottomSheetState extends State<_BookBottomSheet> {
   }
 
   Future<void> _book() async {
-    if (_seats < 1 || _seats > widget.maxSeats) {
+    final seats = _wholeCar ? widget.maxSeats : _seats;
+    if (seats < 1 || seats > widget.maxSeats) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('Choose a valid number of seats'),
         behavior: SnackBarBehavior.floating,
       ));
       return;
     }
-    final rideId = widget.ride['id']?.toString() ?? '';
-    if (rideId.isEmpty) {
+    // A search result is either a real posted ride, or a driver's open
+    // "available for outstation" window that hasn't been booked into a ride
+    // yet (server/outstation-pool-v2.ts materializes the ride on first book).
+    final isAvailability = widget.ride['source']?.toString() == 'availability';
+    final targetId = widget.ride['id']?.toString() ?? '';
+    if (targetId.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('Ride unavailable. Please refresh and try again.'),
         behavior: SnackBarBehavior.floating,
@@ -497,8 +503,9 @@ class _BookBottomSheetState extends State<_BookBottomSheet> {
           'Idempotency-Key': idempotencyKey,
         },
         body: jsonEncode({
-          'rideId': rideId,
-          'seatsBooked': _seats,
+          if (isAvailability) 'availabilityId': targetId else 'rideId': targetId,
+          'seatsBooked': seats,
+          'bookingMode': _wholeCar ? 'whole_car' : 'seat',
           'paymentMethod': _paymentMethod,
           'idempotencyKey': idempotencyKey,
           if (_pickupCtrl.text.trim().isNotEmpty) 'pickupAddress': _pickupCtrl.text.trim(),
@@ -541,7 +548,8 @@ class _BookBottomSheetState extends State<_BookBottomSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final total = widget.farePerSeat * _seats;
+    final effectiveSeats = _wholeCar ? widget.maxSeats : _seats;
+    final total = widget.farePerSeat * effectiveSeats;
     return Container(
       decoration: const BoxDecoration(
         color: Colors.white,
@@ -568,19 +576,31 @@ class _BookBottomSheetState extends State<_BookBottomSheet> {
             ),
             const SizedBox(height: 20),
 
-            // Seats selector
-            Text('Number of Seats', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w400, color: JT.textPrimary)),
+            // Booking mode selector
+            Text('Booking Mode', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w400, color: JT.textPrimary)),
             const SizedBox(height: 8),
             Row(
               children: [
-                _seatBtn(Icons.remove_rounded, () {
+                _modeBtn('Seat(s)', !_wholeCar, () => setState(() => _wholeCar = false)),
+                const SizedBox(width: 10),
+                _modeBtn('Whole Car', _wholeCar, () => setState(() => _wholeCar = true)),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            // Seats selector
+            Text(_wholeCar ? 'Seats' : 'Number of Seats', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w400, color: JT.textPrimary)),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                _seatBtn(Icons.remove_rounded, _wholeCar ? null : () {
                   if (_seats > 1) setState(() => _seats--);
                 }),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: Text('$_seats', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w500, color: JT.textPrimary)),
+                  child: Text('$effectiveSeats', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w500, color: JT.textPrimary)),
                 ),
-                _seatBtn(Icons.add_rounded, () {
+                _seatBtn(Icons.add_rounded, _wholeCar ? null : () {
                   if (_seats < widget.maxSeats) setState(() => _seats++);
                 }),
                 const Spacer(),
@@ -590,6 +610,13 @@ class _BookBottomSheetState extends State<_BookBottomSheet> {
                 ),
               ],
             ),
+            if (_wholeCar) ...[
+              const SizedBox(height: 6),
+              Text(
+                'The whole vehicle ($effectiveSeats seats) is reserved for you. No other passengers can join this ride.',
+                style: TextStyle(fontSize: 11, color: JT.textSecondary),
+              ),
+            ],
 
             const SizedBox(height: 16),
 
@@ -637,15 +664,34 @@ class _BookBottomSheetState extends State<_BookBottomSheet> {
     );
   }
 
-  Widget _seatBtn(IconData icon, VoidCallback onTap) => GestureDetector(
+  Widget _seatBtn(IconData icon, VoidCallback? onTap) => GestureDetector(
     onTap: onTap,
     child: Container(
       width: 36, height: 36,
       decoration: BoxDecoration(
-        color: JT.primary.withValues(alpha: 0.1),
+        color: JT.primary.withValues(alpha: onTap == null ? 0.05 : 0.1),
         shape: BoxShape.circle,
       ),
-      child: Icon(icon, color: JT.primary, size: 18),
+      child: Icon(icon, color: onTap == null ? JT.textSecondary : JT.primary, size: 18),
+    ),
+  );
+
+  Widget _modeBtn(String label, bool selected, VoidCallback onTap) => Expanded(
+    child: GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: selected ? JT.primary : Colors.transparent,
+          border: Border.all(color: selected ? JT.primary : JT.border),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Text(
+          label,
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: selected ? Colors.white : JT.textSecondary),
+        ),
+      ),
     ),
   );
 

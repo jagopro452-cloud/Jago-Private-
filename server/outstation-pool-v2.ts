@@ -408,6 +408,7 @@ export function registerOutstationPoolV2Routes(app: Express, authApp: any, requi
       const driverCategoryR = await rawDb.execute(rawSql`
         SELECT
           dd.vehicle_category_id,
+          dd.intercity_enabled,
           vc.id,
           vc.name,
           vc.type,
@@ -425,6 +426,15 @@ export function registerOutstationPoolV2Routes(app: Express, authApp: any, requi
         return res.status(403).json({
           message: "Only approved pool-enabled drivers can create outstation pool rides",
           code: "OUTSTATION_POOL_DRIVER_NOT_ELIGIBLE",
+        });
+      }
+      // Additional per-driver capability, independent of the category-level
+      // pool eligibility above — see the identical gate in
+      // outstation-pool-matcher.ts's /availability endpoint.
+      if (driverCategory?.intercity_enabled !== true) {
+        return res.status(403).json({
+          message: "Enable Intercity on your vehicle to create outstation pool rides",
+          code: "INTERCITY_NOT_ENABLED",
         });
       }
       try {
@@ -830,16 +840,17 @@ export function registerOutstationPoolV2Routes(app: Express, authApp: any, requi
 
       const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       let categoryFilter = rawSql``;
+      let categoryFilterAvail = rawSql``;
       if (vehicleCategoryId && uuidRe.test(String(vehicleCategoryId))) {
         const matchingIds = (await getMatchingDriverCategoryIds(String(vehicleCategoryId)) || [String(vehicleCategoryId)])
           .filter((id) => uuidRe.test(id));
         if (matchingIds.length === 1) {
           categoryFilter = rawSql`AND opr.vehicle_category_id = ${matchingIds[0]}::uuid`;
+          categoryFilterAvail = rawSql`AND oda.vehicle_category_id = ${matchingIds[0]}::uuid`;
         } else if (matchingIds.length > 1) {
-          categoryFilter = rawSql`AND opr.vehicle_category_id IN (${rawSql.join(
-            matchingIds.map((id) => rawSql`${id}::uuid`),
-            rawSql`, `,
-          )})`;
+          const idList = rawSql.join(matchingIds.map((id) => rawSql`${id}::uuid`), rawSql`, `);
+          categoryFilter = rawSql`AND opr.vehicle_category_id IN (${idList})`;
+          categoryFilterAvail = rawSql`AND oda.vehicle_category_id IN (${idList})`;
         }
       } else if (vehicleType) {
         const vt = String(vehicleType).trim().toLowerCase();
@@ -847,6 +858,7 @@ export function registerOutstationPoolV2Routes(app: Express, authApp: any, requi
           LOWER(COALESCE(vc.vehicle_type, '')) = ${vt}
           OR LOWER(COALESCE(vc.name, '')) LIKE ${`%${vt}%`}
         )`;
+        categoryFilterAvail = categoryFilter;
       }
 
       const r = await rawDb.execute(rawSql`
@@ -855,7 +867,8 @@ export function registerOutstationPoolV2Routes(app: Express, authApp: any, requi
           dd.avg_rating as driver_rating,
           COALESCE(vc.name, '') as vehicle_category_name,
           COALESCE(vc.vehicle_type, '') as vehicle_type,
-          COUNT(opb.id) FILTER (WHERE opb.status != 'cancelled')::int as booked_count
+          COUNT(opb.id) FILTER (WHERE opb.status != 'cancelled')::int as booked_count,
+          'ride' as source
         FROM outstation_pool_rides opr
         JOIN users u ON u.id = opr.driver_id
         LEFT JOIN driver_details dd ON dd.user_id = opr.driver_id
@@ -865,6 +878,7 @@ export function registerOutstationPoolV2Routes(app: Express, authApp: any, requi
           AND opr.status IN ('scheduled', 'active')
           AND opr.accepting_new_requests = true
           AND opr.available_seats >= ${seatsN}
+          AND COALESCE(dd.intercity_enabled, false) = true
           AND LOWER(opr.from_city) LIKE LOWER(${`%${fromCity}%`})
           AND LOWER(opr.to_city) LIKE LOWER(${`%${toCity}%`})
           ${date ? rawSql`AND opr.departure_date = ${date}::date` : rawSql``}
@@ -874,8 +888,50 @@ export function registerOutstationPoolV2Routes(app: Express, authApp: any, requi
         LIMIT 20
       `);
 
+      // Driver availability windows (server/outstation-pool-matcher.ts's "go
+      // available" flow) that haven't yet been booked into a real ride are
+      // also searchable — this is what actually connects that flow to
+      // customer search/book, which previously only ever looked at
+      // outstation_pool_rides. matched_ride_id IS NULL excludes windows
+      // already materialized into a ride (those already surface via the
+      // query above once materialized, so listing them again here would
+      // just duplicate the result).
+      const availR = await rawDb.execute(rawSql`
+        SELECT oda.*,
+          oda.seat_capacity as total_seats,
+          u.full_name as driver_name, u.phone as driver_phone,
+          u.vehicle_number, u.vehicle_model,
+          dd.avg_rating as driver_rating,
+          COALESCE(vc.name, '') as vehicle_category_name,
+          COALESCE(vc.vehicle_type, '') as vehicle_type,
+          0 as booked_count,
+          'availability' as source
+        FROM outstation_driver_availability oda
+        JOIN users u ON u.id = oda.driver_id
+        LEFT JOIN driver_details dd ON dd.user_id = oda.driver_id
+        LEFT JOIN vehicle_categories vc ON vc.id = oda.vehicle_category_id
+        WHERE oda.status = 'available'
+          AND oda.matched_ride_id IS NULL
+          AND oda.available_seats >= ${seatsN}
+          AND COALESCE(dd.intercity_enabled, false) = true
+          AND LOWER(oda.from_city) LIKE LOWER(${`%${fromCity}%`})
+          AND LOWER(oda.to_city) LIKE LOWER(${`%${toCity}%`})
+          ${date ? rawSql`AND ${date}::date BETWEEN oda.earliest_departure::date AND oda.latest_departure::date` : rawSql``}
+          ${categoryFilterAvail}
+        ORDER BY oda.earliest_departure ASC
+        LIMIT 20
+      `);
+      const availResults = (availR.rows as any[]).map(a => ({
+        ...a,
+        route_km: (a.from_lat && a.to_lat) ? haversineKm(parseFloat(a.from_lat), parseFloat(a.from_lng), parseFloat(a.to_lat), parseFloat(a.to_lng)) : 0,
+        departure_date: a.earliest_departure ? new Date(a.earliest_departure).toISOString().slice(0, 10) : null,
+        departure_time: a.earliest_departure ? new Date(a.earliest_departure).toISOString().slice(11, 16) : null,
+        fare_per_seat: null,
+        availabilityId: a.id,
+      }));
+
       // Calculate segment fare for each result
-      const results = (r.rows as any[]).map(ride => {
+      const results = [...(r.rows as any[]), ...availResults].map(ride => {
         const pkmps = parseFloat(ride.price_per_km_per_seat || DEFAULT_PRICE_PER_KM_PER_SEAT);
         const fromLatR = parseFloat(ride.from_lat || 0);
         const fromLngR = parseFloat(ride.from_lng || 0);
@@ -924,35 +980,45 @@ export function registerOutstationPoolV2Routes(app: Express, authApp: any, requi
     try {
       const customer = req.currentUser;
       const {
-        rideId,
-        seats = 1,
+        rideId, availabilityId,
+        bookingMode = "seat",  // 'seat' (default, 1-2 seats) or 'whole_car' (exclusive, all seats)
         pickupLat, pickupLng, dropLat, dropLng,
         pickupAddress, dropAddress,
         paymentMethod = "cash",
         includeInsurance = true,  // customer opts in/out of insurance (₹2 goes to platform)
       } = req.body;
+      // seats/seatsBooked and dropAddress/dropoffAddress: both apps have
+      // used slightly different field names historically — accept either.
+      const seats = req.body.seats ?? req.body.seatsBooked ?? 1;
+      const dropAddressValue = dropAddress ?? req.body.dropoffAddress;
+      const wholeCar = bookingMode === "whole_car";
 
-      if (!rideId) return res.status(400).json({ message: "rideId required" });
-      if (!pickupLat || !pickupLng || !dropLat || !dropLng) {
-        return res.status(400).json({ message: "pickup and drop coordinates required" });
-      }
+      if (!rideId && !availabilityId) return res.status(400).json({ message: "rideId or availabilityId required" });
 
-      const requestedSeats = parseInt(String(seats), 10) || 1;
-      if (requestedSeats < 1 || requestedSeats > 2) {
+      let requestedSeats = parseInt(String(seats), 10) || 1;
+      if (!wholeCar && (requestedSeats < 1 || requestedSeats > 2)) {
         return res.status(400).json({ message: "You can book only 1 or 2 seats per booking" });
       }
-      const seatsN = requestedSeats;
-      const pLat = parseFloat(pickupLat);
-      const pLng = parseFloat(pickupLng);
-      const dLat = parseFloat(dropLat);
-      const dLng = parseFloat(dropLng);
+      let seatsN = requestedSeats;
+
+      // Custom pickup/drop points are optional — when omitted, the booking
+      // covers the ride's full posted route (its own from/to become the
+      // segment), which is the only option the customer apps currently
+      // offer (city-to-city search, no map picker for a mid-route point).
+      let pLat = pickupLat != null ? parseFloat(pickupLat) : null;
+      let pLng = pickupLng != null ? parseFloat(pickupLng) : null;
+      let dLat = dropLat != null ? parseFloat(dropLat) : null;
+      let dLng = dropLng != null ? parseFloat(dropLng) : null;
+      const customSegment = pLat != null && pLng != null && dLat != null && dLng != null;
 
       // Reject GPS-not-yet-resolved coordinates (0,0 is in the Atlantic Ocean)
-      if (Math.abs(pLat) < 0.001 && Math.abs(pLng) < 0.001) {
-        return res.status(400).json({ message: "Invalid pickup coordinates — GPS not yet resolved" });
-      }
-      if (Math.abs(dLat) < 0.001 && Math.abs(dLng) < 0.001) {
-        return res.status(400).json({ message: "Invalid drop coordinates — GPS not yet resolved" });
+      if (customSegment) {
+        if (Math.abs(pLat!) < 0.001 && Math.abs(pLng!) < 0.001) {
+          return res.status(400).json({ message: "Invalid pickup coordinates — GPS not yet resolved" });
+        }
+        if (Math.abs(dLat!) < 0.001 && Math.abs(dLng!) < 0.001) {
+          return res.status(400).json({ message: "Invalid drop coordinates — GPS not yet resolved" });
+        }
       }
 
       // Atomically check seats + lock
@@ -960,19 +1026,83 @@ export function registerOutstationPoolV2Routes(app: Express, authApp: any, requi
       let ride: any;
       try {
         await txClient.query("BEGIN");
+        let resolvedRideId = rideId ? String(rideId) : null;
+
+        if (!resolvedRideId && availabilityId) {
+          // Materialize a real outstation_pool_rides row from the driver's
+          // availability window on first booking — mirrors the existing
+          // materialize-on-accept logic in outstation-pool-matcher.ts's
+          // requests/:id/accept, just triggered by a direct customer book
+          // instead of the (currently unreachable-from-the-apps) request/
+          // accept flow.
+          const availR = await txClient.query(
+            `SELECT * FROM outstation_driver_availability WHERE id = $1 AND status = 'available' FOR UPDATE`,
+            [String(availabilityId)],
+          );
+          const avail = availR.rows[0];
+          if (!avail) {
+            await txClient.query("ROLLBACK");
+            return res.status(409).json({ message: "This availability window is no longer open" });
+          }
+          if (avail.matched_ride_id) {
+            resolvedRideId = String(avail.matched_ride_id);
+          } else {
+            if (avail.available_seats < seatsN) {
+              await txClient.query("ROLLBACK");
+              return res.status(409).json({ message: "Not enough seats available" });
+            }
+            const routeKm = (avail.from_lat && avail.to_lat)
+              ? haversineKm(parseFloat(avail.from_lat), parseFloat(avail.from_lng), parseFloat(avail.to_lat), parseFloat(avail.to_lng))
+              : 0;
+            const pkmps = parseFloat(avail.price_per_km_per_seat || DEFAULT_PRICE_PER_KM_PER_SEAT);
+            const farePerSeatFull = Math.round(Math.max(MIN_FARE_PER_BOOKING, pkmps * routeKm) * 100) / 100;
+            const newRideR = await txClient.query(
+              `INSERT INTO outstation_pool_rides
+                (driver_id, vehicle_category_id, from_city, to_city, from_lat, from_lng, to_lat, to_lng,
+                 route_km, departure_date, departure_time,
+                 total_seats, available_seats, fare_per_seat, price_per_km_per_seat,
+                 status, is_active, formed_via)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12,$13,$14,'scheduled',true,'pooled')
+               RETURNING id`,
+              [
+                avail.driver_id, avail.vehicle_category_id, avail.from_city, avail.to_city,
+                avail.from_lat, avail.from_lng, avail.to_lat, avail.to_lng,
+                routeKm, avail.earliest_departure ? new Date(avail.earliest_departure).toISOString().slice(0, 10) : null,
+                avail.earliest_departure ? new Date(avail.earliest_departure).toISOString().slice(11, 16) : null,
+                avail.seat_capacity, farePerSeatFull, pkmps,
+              ],
+            );
+            resolvedRideId = String(newRideR.rows[0].id);
+            await txClient.query(
+              `UPDATE outstation_driver_availability SET matched_ride_id = $1, updated_at = NOW() WHERE id = $2`,
+              [resolvedRideId, avail.id],
+            );
+          }
+        }
+
         const rideR = await txClient.query(
           `SELECT * FROM outstation_pool_rides
            WHERE id = $1 AND is_active = true AND status IN ('scheduled','active')
              AND accepting_new_requests = true
              AND available_seats >= $2
            FOR UPDATE`,
-          [rideId, seatsN],
+          [resolvedRideId, wholeCar ? 1 : seatsN],
         );
         if (!rideR.rows.length) {
           await txClient.query("ROLLBACK");
           return res.status(409).json({ message: "Ride not available or not enough seats" });
         }
         ride = rideR.rows[0];
+
+        if (wholeCar) {
+          if (ride.available_seats !== ride.total_seats) {
+            await txClient.query("ROLLBACK");
+            return res.status(409).json({ message: "Whole car is unavailable — some seats are already booked on this ride" });
+          }
+          seatsN = ride.available_seats;
+        }
+        const finalRideId = resolvedRideId as string;
+
         if (await hasActivePoolBlock(String(customer.id), String(ride.driver_id))) {
           await txClient.query("ROLLBACK");
           return res.status(403).json({ message: "This pool driver is unavailable for this booking" });
@@ -983,46 +1113,56 @@ export function registerOutstationPoolV2Routes(app: Express, authApp: any, requi
           `SELECT id FROM outstation_pool_bookings
            WHERE ride_id = $1 AND customer_id = $2 AND status NOT IN ('cancelled')
            LIMIT 1`,
-          [rideId, (req as any).currentUser.id],
+          [finalRideId, (req as any).currentUser.id],
         );
         if (dupR.rows.length) {
           await txClient.query("ROLLBACK");
           return res.status(409).json({ message: "You already have an active booking on this ride" });
         }
 
-        // Validate customer's pickup/drop is on this route
         const fromLatR = parseFloat(ride.from_lat || 0);
         const fromLngR = parseFloat(ride.from_lng || 0);
         const toLatR   = parseFloat(ride.to_lat   || 0);
         const toLngR   = parseFloat(ride.to_lng   || 0);
 
-        if (fromLatR && toLatR) {
-          if (!isOnRoute(pLat, pLng, fromLatR, fromLngR, toLatR, toLngR)) {
-            await txClient.query("ROLLBACK");
-            return res.status(400).json({ message: "Pickup location is not on this route" });
+        if (customSegment) {
+          // Validate customer's custom pickup/drop is on this route
+          if (fromLatR && toLatR) {
+            if (!isOnRoute(pLat!, pLng!, fromLatR, fromLngR, toLatR, toLngR)) {
+              await txClient.query("ROLLBACK");
+              return res.status(400).json({ message: "Pickup location is not on this route" });
+            }
+            if (!isOnRoute(dLat!, dLng!, fromLatR, fromLngR, toLatR, toLngR)) {
+              await txClient.query("ROLLBACK");
+              return res.status(400).json({ message: "Drop location is not on this route" });
+            }
+            if (!pickupBeforeDrop(pLat!, pLng!, dLat!, dLng!, fromLatR, fromLngR)) {
+              await txClient.query("ROLLBACK");
+              return res.status(400).json({ message: "Pickup must be before drop along the route" });
+            }
           }
-          if (!isOnRoute(dLat, dLng, fromLatR, fromLngR, toLatR, toLngR)) {
-            await txClient.query("ROLLBACK");
-            return res.status(400).json({ message: "Drop location is not on this route" });
-          }
-          if (!pickupBeforeDrop(pLat, pLng, dLat, dLng, fromLatR, fromLngR)) {
-            await txClient.query("ROLLBACK");
-            return res.status(400).json({ message: "Pickup must be before drop along the route" });
-          }
+        } else {
+          // No custom segment given — book the ride's full posted route.
+          pLat = fromLatR; pLng = fromLngR; dLat = toLatR; dLng = toLngR;
         }
 
+        // pLat/pLng/dLat/dLng are guaranteed non-null here: either the
+        // customSegment branch validated them, or the else branch just
+        // defaulted them to the route's own from/to coordinates.
+        const pLatV = pLat as number, pLngV = pLng as number, dLatV = dLat as number, dLngV = dLng as number;
+
         // Calculate segment fare
-        const segmentKm = haversineKm(pLat, pLng, dLat, dLng);
+        const segmentKm = haversineKm(pLatV, pLngV, dLatV, dLngV);
         const pkmps = parseFloat(ride.price_per_km_per_seat || DEFAULT_PRICE_PER_KM_PER_SEAT);
         const { farePerSeat, totalFare } = calcSegmentFare(segmentKm, seatsN, pkmps);
 
         // Calculate pickup_order (based on distance from route origin)
         const pickupDistFromOrigin = fromLatR
-          ? haversineKm(fromLatR, fromLngR, pLat, pLng)
+          ? haversineKm(fromLatR, fromLngR, pLatV, pLngV)
           : 0;
         const existingOrders = await txClient.query(
           `SELECT COUNT(*) as cnt FROM outstation_pool_bookings WHERE ride_id = $1 AND status != 'cancelled'`,
-          [rideId],
+          [finalRideId],
         );
         const pickupOrder = parseInt(existingOrders.rows[0].cnt) + 1;
 
@@ -1049,35 +1189,42 @@ export function registerOutstationPoolV2Routes(app: Express, authApp: any, requi
           `INSERT INTO outstation_pool_bookings
             (ride_id, customer_id, seats_booked, total_fare, fare_per_seat, segment_km,
              from_city, to_city, pickup_lat, pickup_lng, drop_lat, drop_lng,
-             pickup_address, dropoff_address, payment_method, status, payment_status, pickup_order)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'confirmed','pending',$16)
+             pickup_address, dropoff_address, payment_method, status, payment_status, pickup_order, booking_mode)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'confirmed','pending',$16,$17)
            RETURNING id`,
           [
-            rideId, customer.id, seatsN, totalFare, farePerSeat, Math.round(segmentKm * 100) / 100,
+            finalRideId, customer.id, seatsN, totalFare, farePerSeat, Math.round(segmentKm * 100) / 100,
             ride.from_city, ride.to_city,
             pLat, pLng, dLat, dLng,
-            pickupAddress || null, dropAddress || null,
-            paymentMethod, pickupOrder,
+            pickupAddress || null, dropAddressValue || null,
+            paymentMethod, pickupOrder, bookingMode,
           ],
         );
         const bookingId = bookR.rows[0]?.id;
 
-        // Decrement available seats
+        // Decrement available seats. A whole-car booking additionally closes
+        // the ride to further requests so no one else can take "remaining"
+        // seats out from under an exclusive booking — the same flag the
+        // search/lock queries above already filter on.
         await txClient.query(
-          `UPDATE outstation_pool_rides SET available_seats = available_seats - $1, state_version = state_version + 1, updated_at = NOW() WHERE id = $2`,
-          [seatsN, rideId],
+          `UPDATE outstation_pool_rides
+           SET available_seats = available_seats - $1, state_version = state_version + 1, updated_at = NOW()
+               ${wholeCar ? ", accepting_new_requests = false" : ""}
+           WHERE id = $2`,
+          [seatsN, finalRideId],
         );
 
         await txClient.query("COMMIT");
 
         // Notify driver about new booking
         io.to(`user:${ride.driver_id}`).emit("outstation_pool:new_booking", {
-          rideId,
+          rideId: finalRideId,
           bookingId,
           passengerName: customer.fullName || "Passenger",
           seatsBooked: seatsN,
-          pickupAddress: pickupAddress || `${pLat.toFixed(4)},${pLng.toFixed(4)}`,
-          dropAddress: dropAddress || `${dLat.toFixed(4)},${dLng.toFixed(4)}`,
+          bookingMode,
+          pickupAddress: pickupAddress || `${pLatV.toFixed(4)},${pLngV.toFixed(4)}`,
+          dropAddress: dropAddressValue || `${dLatV.toFixed(4)},${dLngV.toFixed(4)}`,
           totalFare,
           segmentKm: Math.round(segmentKm * 10) / 10,
         });
@@ -1090,9 +1237,9 @@ export function registerOutstationPoolV2Routes(app: Express, authApp: any, requi
             module: "outstation_pool",
             referenceId: String(bookingId),
             bookingId: String(bookingId),
-            rideId: String(rideId),
+            rideId: String(finalRideId),
             pickupAddress: String(pickupAddress || ""),
-            dropAddress: String(dropAddress || ""),
+            dropAddress: String(dropAddressValue || ""),
           },
         );
         void sendPoolPush(
@@ -1104,7 +1251,7 @@ export function registerOutstationPoolV2Routes(app: Express, authApp: any, requi
             module: "outstation_pool",
             referenceId: String(bookingId),
             bookingId: String(bookingId),
-            rideId: String(rideId),
+            rideId: String(finalRideId),
           },
         );
 
@@ -1130,12 +1277,15 @@ export function registerOutstationPoolV2Routes(app: Express, authApp: any, requi
         res.json({
           success: true,
           bookingId,
-          rideId,
+          rideId: finalRideId,
           seatsBooked: seatsN,
+          bookingMode,
           farePerSeat,
           totalFare,
           fareBreakdown,
-          message: "Booking confirmed! Driver will pick you up at your location.",
+          message: wholeCar
+            ? "Whole car booked! Driver will pick you up at your location."
+            : "Booking confirmed! Driver will pick you up at your location.",
         });
       } catch (e) {
         await txClient.query("ROLLBACK");
@@ -1149,6 +1299,37 @@ export function registerOutstationPoolV2Routes(app: Express, authApp: any, requi
   });
 
   // ─── CUSTOMER: My outstation pool bookings ────────────────────────────────
+
+  // ─── CUSTOMER: Find my current active Intercity booking (app-resume) ────
+  // Same shape as /v2/bookings below, filtered to the one most-recent
+  // non-terminal booking — lets the app find an in-progress Outstation Pool
+  // booking after being closed/reopened, mirroring
+  // /api/app/customer/active-trip's role for normal rides.
+  app.get("/api/app/customer/outstation-pool/v2/active", authApp, async (req: any, res: any) => {
+    try {
+      const customer = req.currentUser;
+      const r = await rawDb.execute(rawSql`
+        SELECT opb.*,
+          opr.from_city, opr.to_city, opr.departure_date, opr.departure_time,
+          opr.status as ride_status, opr.current_lat, opr.current_lng, opr.driver_id,
+          opr.vehicle_number, opr.vehicle_model,
+          u.full_name as driver_name, u.phone as driver_phone,
+          dd.avg_rating as driver_rating
+        FROM outstation_pool_bookings opb
+        JOIN outstation_pool_rides opr ON opr.id = opb.ride_id
+        JOIN users u ON u.id = opr.driver_id
+        LEFT JOIN driver_details dd ON dd.user_id = opr.driver_id
+        WHERE opb.customer_id = ${customer.id}::uuid
+          AND opb.status IN ('confirmed', 'picked_up')
+        ORDER BY opb.created_at DESC
+        LIMIT 1
+      `);
+      if (!r.rows.length) return res.json({ active: false, booking: null });
+      res.json({ active: true, booking: r.rows[0] });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
 
   app.get("/api/app/customer/outstation-pool/v2/bookings", authApp, async (req: any, res: any) => {
     try {

@@ -115,6 +115,16 @@ export async function ensureBootstrapSchema() {
   await pool.query(`
     ALTER TABLE driver_details ADD COLUMN IF NOT EXISTS car_share_enabled BOOLEAN DEFAULT false
   `).catch(logBootstrapStepError("driver_details.car_share_enabled"));
+  // Persistent, driver-set "Enable Intercity?" capability flag on their
+  // registered vehicle — gates Outstation Pool ride-posting/availability,
+  // independent of car_share_enabled. Deliberately a fresh column rather
+  // than the pre-existing outstation_eligibility/intercity_eligibility
+  // pair: neither is read by the actual outstation-pool-v2.ts/matcher.ts
+  // code, both default true (wrong direction for a new capability gate),
+  // and only one of the two even has admin UI.
+  await pool.query(`
+    ALTER TABLE driver_details ADD COLUMN IF NOT EXISTS intercity_enabled BOOLEAN DEFAULT false
+  `).catch(logBootstrapStepError("driver_details.intercity_enabled"));
   // Pre-existing gap: update-registration's driver_details upsert writes
   // updated_at=now(), but the live production table never had this column —
   // every registration submit that included a vehicleType failed outright
@@ -212,6 +222,9 @@ export async function ensureBootstrapSchema() {
   await pool.query(`ALTER TABLE pool_ride_requests ADD COLUMN IF NOT EXISTS settlement_outbox_id UUID`).catch(logBootstrapStepError("pool_ride_requests.settlement_outbox_id"));
   await pool.query(`ALTER TABLE outstation_pool_bookings ADD COLUMN IF NOT EXISTS settlement_status VARCHAR(20) DEFAULT 'pending'`).catch(logBootstrapStepError("outstation_pool_bookings.settlement_status"));
   await pool.query(`ALTER TABLE outstation_pool_bookings ADD COLUMN IF NOT EXISTS settlement_outbox_id UUID`).catch(logBootstrapStepError("outstation_pool_bookings.settlement_outbox_id"));
+  // 'seat' (default, shared) or 'whole_car' (exclusive — booking consumes
+  // every seat on the ride and the ride stops accepting further requests).
+  await pool.query(`ALTER TABLE outstation_pool_bookings ADD COLUMN IF NOT EXISTS booking_mode VARCHAR(20) DEFAULT 'seat'`).catch(logBootstrapStepError("outstation_pool_bookings.booking_mode"));
 
   // Generic admin key/value settings store — used by dispatch.ts's DB-driven
   // dispatch_configs override (falls back to hardcoded defaults if no row exists)

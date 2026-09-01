@@ -237,6 +237,9 @@ function VerifyModal({ driver, open, onClose }: { driver: any; open: boolean; on
 export default function Drivers() {
   const [search, setSearch] = useState("");
   const [verifyTab, setVerifyTab] = useState<"all" | "pending" | "approved" | "rejected">("all");
+  const [carShareTab, setCarShareTab] = useState<"all" | "enabled" | "disabled">("all");
+  const [intercityTab, setIntercityTab] = useState<"all" | "enabled" | "disabled">("all");
+  const [categoryFilter, setCategoryFilter] = useState("");
   const [page, setPage] = useState(1);
   const [verifyTarget, setVerifyTarget] = useState<any>(null);
   const [showAdd, setShowAdd] = useState(false);
@@ -284,22 +287,39 @@ export default function Drivers() {
     !addDriver.isPending;
 
   const { data, isLoading } = useQuery<any>({
-    queryKey: ["/api/users", { userType: "driver", search, page, verificationStatus: verifyTab }],
+    queryKey: ["/api/users", { userType: "driver", search, page, verificationStatus: verifyTab, carShare: carShareTab, intercity: intercityTab, vehicleCategoryId: categoryFilter }],
     queryFn: () => {
       const params = new URLSearchParams({ userType: "driver", page: String(page), limit: "50" });
       if (search) params.set("search", search);
       if (verifyTab !== "all") params.set("verificationStatus", verifyTab);
+      if (carShareTab !== "all") params.set("carShare", carShareTab);
+      if (intercityTab !== "all") params.set("intercity", intercityTab);
+      if (categoryFilter) params.set("vehicleCategoryId", categoryFilter);
       return adminFetch(`/api/users?${params}`).then(r => r.ok ? r.json() : r.json().then(d => { throw new Error(d?.message || "Error") })).then(d => d?.data ? d : { data: Array.isArray(d) ? d : [], total: 0 });
     },
   });
 
+  const { data: vehicleCategories } = useQuery<any[]>({ queryKey: ["/api/vehicle-categories"] });
+
   useEffect(() => {
     setPage(1);
-  }, [search, verifyTab]);
+  }, [search, verifyTab, carShareTab, intercityTab, categoryFilter]);
 
   const toggleActive = useMutation({
     mutationFn: ({ id, isActive }: any) => apiRequest("PATCH", `/api/users/${id}/status`, { isActive }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/users"] }),
+  });
+
+  const toggleCarShare = useMutation({
+    mutationFn: ({ id, carShareEnabled }: any) => apiRequest("PATCH", `/api/admin/drivers/${id}/documents`, { carShareEnabled }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/users"] }),
+    onError: (e: any) => toast({ title: "Failed to update Car Share", description: e.message, variant: "destructive" }),
+  });
+
+  const toggleIntercity = useMutation({
+    mutationFn: ({ id, intercityEnabled }: any) => apiRequest("PATCH", `/api/admin/drivers/${id}/documents`, { intercityEnabled }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/users"] }),
+    onError: (e: any) => toast({ title: "Failed to update Intercity", description: e.message, variant: "destructive" }),
   });
 
   const drivers: any[] = Array.isArray(data?.data) ? data.data : [];
@@ -308,6 +328,10 @@ export default function Drivers() {
   const pendingCount = Number(summary.pending ?? 0);
   const approvedCount = Number(summary.approved ?? 0);
   const rejectedCount = Number(summary.rejected ?? 0);
+  const carShareEnabledCount = Number(summary.carShareEnabled ?? 0);
+  const carShareDisabledCount = Number(summary.carShareDisabled ?? 0);
+  const intercityEnabledCount = Number(summary.intercityEnabled ?? 0);
+  const intercityDisabledCount = Number(summary.intercityDisabled ?? 0);
   const totalRows = Number(data?.total ?? drivers.length);
   const totalPages = Math.max(1, Math.ceil(totalRows / 50));
   const firstRow = totalRows === 0 ? 0 : (page - 1) * 50 + 1;
@@ -471,20 +495,44 @@ export default function Drivers() {
               </li>
             ))}
           </ul>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, background: "#f8fafc", border: "1.5px solid #e2e8f0", borderRadius: 10, padding: "6px 12px" }}>
-            <i className="bi bi-search" style={{ fontSize: 12, color: "#94a3b8" }}></i>
-            <input style={{ border: "none", background: "transparent", outline: "none", fontSize: 13, width: 200 }}
-              placeholder="Search drivers..." value={search} onChange={e => setSearch(e.target.value)}
-              data-testid="input-driver-search" />
+          <div className="d-flex align-items-center gap-2 flex-wrap">
+            <select className="form-select form-select-sm" style={{ fontSize: 12, width: 160 }}
+              value={carShareTab} onChange={e => setCarShareTab(e.target.value as any)}
+              data-testid="select-car-share-filter">
+              <option value="all">Car Share: All</option>
+              <option value="enabled">Car Share: Enabled ({carShareEnabledCount})</option>
+              <option value="disabled">Car Share: Disabled ({carShareDisabledCount})</option>
+            </select>
+            <select className="form-select form-select-sm" style={{ fontSize: 12, width: 160 }}
+              value={intercityTab} onChange={e => setIntercityTab(e.target.value as any)}
+              data-testid="select-intercity-filter">
+              <option value="all">Intercity: All</option>
+              <option value="enabled">Intercity: Enabled ({intercityEnabledCount})</option>
+              <option value="disabled">Intercity: Disabled ({intercityDisabledCount})</option>
+            </select>
+            <select className="form-select form-select-sm" style={{ fontSize: 12, width: 170 }}
+              value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}
+              data-testid="select-category-filter">
+              <option value="">All Categories</option>
+              {(vehicleCategories || []).map((c: any) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, background: "#f8fafc", border: "1.5px solid #e2e8f0", borderRadius: 10, padding: "6px 12px" }}>
+              <i className="bi bi-search" style={{ fontSize: 12, color: "#94a3b8" }}></i>
+              <input style={{ border: "none", background: "transparent", outline: "none", fontSize: 13, width: 200 }}
+                placeholder="Search drivers..." value={search} onChange={e => setSearch(e.target.value)}
+                data-testid="input-driver-search" />
+            </div>
           </div>
         </div>
 
         <div className="card-body p-0">
-          <AdminDataTable minWidth={1080} aria-label="Drivers list">
+          <AdminDataTable minWidth={1340} aria-label="Drivers list">
               <thead style={{ background: "#f8fafc" }}>
                 <tr>
-                  {["#","Driver","Contact","Vehicle Info","Documents","Rating","Status","Verification","Action"].map((h, i) => (
-                    <th key={i} className={i === 0 ? "ps-4" : i === 8 ? "text-center pe-4" : ""}
+                  {["#","Driver","Contact","Vehicle Info","Category","Car Share","Intercity","Documents","Rating","Status","Verification","Action"].map((h, i) => (
+                    <th key={i} className={i === 0 ? "ps-4" : i === 11 ? "text-center pe-4" : ""}
                       style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".5px", paddingTop: 12, paddingBottom: 12 }}>
                       {h}
                     </th>
@@ -494,10 +542,10 @@ export default function Drivers() {
               <tbody>
                 {isLoading ? (
                   Array(4).fill(0).map((_, i) => (
-                    <tr key={i}>{Array(9).fill(0).map((_, j) => <td key={j}><div style={{ height: 14, background: "#f1f5f9", borderRadius: 4 }} /></td>)}</tr>
+                    <tr key={i}>{Array(12).fill(0).map((_, j) => <td key={j}><div style={{ height: 14, background: "#f1f5f9", borderRadius: 4 }} /></td>)}</tr>
                   ))
                 ) : drivers.length === 0 ? (
-                  <tr><td colSpan={9}>
+                  <tr><td colSpan={12}>
                     <AdminEmptyState icon="bi-people" title="No drivers found" />
                   </td></tr>
                 ) : drivers.map((driver: any, idx: number) => {
@@ -538,6 +586,27 @@ export default function Drivers() {
                             <div style={{ fontSize: 10.5, color: "#94a3b8" }}>{driver.vehicleModel || "—"}</div>
                           </div>
                         ) : <span className="text-muted small">—</span>}
+                      </td>
+                      <td style={{ fontSize: 12, color: "#64748b" }}>
+                        {driver.vehicleCategoryName || <span className="text-muted small">—</span>}
+                      </td>
+                      <td>
+                        <label className="switcher" title={driver.carShareEnabled ? "Car Share enabled" : "Car Share disabled"}>
+                          <input type="checkbox" className="switcher_input" checked={!!driver.carShareEnabled}
+                            disabled={toggleCarShare.isPending}
+                            onChange={() => toggleCarShare.mutate({ id: driver.id, carShareEnabled: !driver.carShareEnabled })}
+                            data-testid={`toggle-car-share-${driver.id}`} />
+                          <span className="switcher_control"></span>
+                        </label>
+                      </td>
+                      <td>
+                        <label className="switcher" title={driver.intercityEnabled ? "Intercity enabled" : "Intercity disabled"}>
+                          <input type="checkbox" className="switcher_input" checked={!!driver.intercityEnabled}
+                            disabled={toggleIntercity.isPending}
+                            onChange={() => toggleIntercity.mutate({ id: driver.id, intercityEnabled: !driver.intercityEnabled })}
+                            data-testid={`toggle-intercity-${driver.id}`} />
+                          <span className="switcher_control"></span>
+                        </label>
                       </td>
                       <td>
                         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>

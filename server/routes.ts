@@ -3514,25 +3514,61 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         isActive === "true" ? true :
         isActive === "false" ? false :
         undefined;
-      const result = await storage.getUsers(
-        userType,
-        search,
-        Number(page) || 1,
-        Math.min(Number(limit) || 15, 100),
-        activeFilter,
-        verificationStatus,
-      );
       if (userType === "driver") {
+        // Driver rows need car_share_enabled + vehicle category, which live
+        // on driver_details/vehicle_categories, not on users — storage.getUsers()
+        // only selects from users, so drivers are listed via a dedicated
+        // joined query instead (also carries the carShare/vehicleCategoryId
+        // filters the generic getUsers() has no notion of).
+        const pageNum = Number(page) || 1;
+        const limitNum = Math.min(Number(limit) || 15, 100);
+        const offset = (pageNum - 1) * limitNum;
+        const carShareFilter = String(req.query.carShare || "all").toLowerCase();
+        const intercityFilter = String(req.query.intercity || "all").toLowerCase();
+        const vehicleCategoryIdFilter = String(req.query.vehicleCategoryId || "").trim();
+
+        const whereSql = rawSql`
+          u.user_type = 'driver'
+          ${search ? rawSql`AND (u.full_name ILIKE ${"%" + search + "%"} OR u.email ILIKE ${"%" + search + "%"} OR u.phone ILIKE ${"%" + search + "%"})` : rawSql``}
+          ${typeof activeFilter === "boolean" ? rawSql`AND u.is_active = ${activeFilter}` : rawSql``}
+          ${verificationStatus && verificationStatus !== "all" ? rawSql`AND u.verification_status = ${verificationStatus}` : rawSql``}
+          ${carShareFilter === "enabled" ? rawSql`AND dd.car_share_enabled = true` : rawSql``}
+          ${carShareFilter === "disabled" ? rawSql`AND COALESCE(dd.car_share_enabled, false) = false` : rawSql``}
+          ${intercityFilter === "enabled" ? rawSql`AND dd.intercity_enabled = true` : rawSql``}
+          ${intercityFilter === "disabled" ? rawSql`AND COALESCE(dd.intercity_enabled, false) = false` : rawSql``}
+          ${vehicleCategoryIdFilter ? rawSql`AND dd.vehicle_category_id = ${vehicleCategoryIdFilter}::uuid` : rawSql``}
+        `;
+
+        const rowsR = await rawDb.execute(rawSql`
+          SELECT u.*, dd.car_share_enabled, dd.intercity_enabled, dd.vehicle_category_id, vc.name AS vehicle_category_name
+          FROM users u
+          LEFT JOIN driver_details dd ON dd.user_id = u.id
+          LEFT JOIN vehicle_categories vc ON vc.id = dd.vehicle_category_id
+          WHERE ${whereSql}
+          ORDER BY u.created_at DESC
+          LIMIT ${limitNum} OFFSET ${offset}
+        `);
+        const totalR = await rawDb.execute(rawSql`
+          SELECT COUNT(*)::int AS total
+          FROM users u
+          LEFT JOIN driver_details dd ON dd.user_id = u.id
+          WHERE ${whereSql}
+        `);
         const summaryRows = await rawDb.execute(rawSql`
           SELECT
             COUNT(*)::int AS total,
-            COUNT(*) FILTER (WHERE COALESCE(verification_status, 'pending') = 'pending')::int AS pending,
-            COUNT(*) FILTER (WHERE verification_status = 'approved')::int AS approved,
-            COUNT(*) FILTER (WHERE verification_status = 'rejected')::int AS rejected
-          FROM users
-          WHERE user_type = 'driver'
-            ${search ? rawSql`AND (full_name ILIKE ${"%" + search + "%"} OR email ILIKE ${"%" + search + "%"} OR phone ILIKE ${"%" + search + "%"})` : rawSql``}
-            ${typeof activeFilter === "boolean" ? rawSql`AND is_active = ${activeFilter}` : rawSql``}
+            COUNT(*) FILTER (WHERE COALESCE(u.verification_status, 'pending') = 'pending')::int AS pending,
+            COUNT(*) FILTER (WHERE u.verification_status = 'approved')::int AS approved,
+            COUNT(*) FILTER (WHERE u.verification_status = 'rejected')::int AS rejected,
+            COUNT(*) FILTER (WHERE dd.car_share_enabled = true)::int AS car_share_enabled,
+            COUNT(*) FILTER (WHERE COALESCE(dd.car_share_enabled, false) = false)::int AS car_share_disabled,
+            COUNT(*) FILTER (WHERE dd.intercity_enabled = true)::int AS intercity_enabled,
+            COUNT(*) FILTER (WHERE COALESCE(dd.intercity_enabled, false) = false)::int AS intercity_disabled
+          FROM users u
+          LEFT JOIN driver_details dd ON dd.user_id = u.id
+          WHERE u.user_type = 'driver'
+            ${search ? rawSql`AND (u.full_name ILIKE ${"%" + search + "%"} OR u.email ILIKE ${"%" + search + "%"} OR u.phone ILIKE ${"%" + search + "%"})` : rawSql``}
+            ${typeof activeFilter === "boolean" ? rawSql`AND u.is_active = ${activeFilter}` : rawSql``}
         `);
         // The driver app writes uploaded KYC/registration documents (DL, RC,
         // insurance, selfie, vehicle photo) into driver_documents — not into
@@ -3541,12 +3577,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         // shows "no documents" for every driver who registered through the
         // app, even though the uploads succeeded and are visible on the
         // separate Driver Verification page.
-        const dataWithDocs = await Promise.all((result.data as any[]).map(async (d: any) => ({
-          ...d,
+        const dataWithDocs = await Promise.all((rowsR.rows as any[]).map(async (d: any) => ({
+          ...camelize(d),
           documents: await getDriverDocumentsForResponse(String(d.id)),
         })));
-        return res.json({ ...result, data: dataWithDocs, summary: camelize(summaryRows.rows[0] || {}) });
+        return res.json({ data: dataWithDocs, total: Number((totalR.rows[0] as any)?.total || 0), summary: camelize(summaryRows.rows[0] || {}) });
       }
+      const result = await storage.getUsers(
+        userType,
+        search,
+        Number(page) || 1,
+        Math.min(Number(limit) || 15, 100),
+        activeFilter,
+        verificationStatus,
+      );
       res.json(result);
     } catch (e: any) {
       res.status(500).json({ message: safeErrMsg(e) });
@@ -7439,7 +7483,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Admin-auth version of the same document update (used by admin panel VerifyModal)
   app.patch("/api/admin/drivers/:id/documents", requireAdminAuth, async (req, res) => {
     try {
-      const { licenseImage, vehicleImage, profileImage, licenseNumber, vehicleNumber, vehicleModel } = req.body;
+      const { licenseImage, vehicleImage, profileImage, licenseNumber, vehicleNumber, vehicleModel, carShareEnabled, intercityEnabled } = req.body;
       const updateData: any = {};
       if (licenseImage !== undefined) updateData.licenseImage = licenseImage;
       if (vehicleImage !== undefined) updateData.vehicleImage = vehicleImage;
@@ -7447,7 +7491,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (licenseNumber !== undefined) updateData.licenseNumber = licenseNumber;
       if (vehicleNumber !== undefined) updateData.vehicleNumber = vehicleNumber;
       if (vehicleModel !== undefined) updateData.vehicleModel = vehicleModel;
-      await storage.updateUser(String(req.params.id), updateData);
+      if (Object.keys(updateData).length > 0) {
+        await storage.updateUser(String(req.params.id), updateData);
+      }
+      // car_share_enabled/intercity_enabled live on driver_details, not
+      // users, so they're written separately here — same admin-editable
+      // flags the driver's own registration/profile screens toggle, just
+      // exposed to admin oversight/override.
+      if (typeof carShareEnabled === "boolean") {
+        await rawDb.execute(rawSql`
+          UPDATE driver_details SET car_share_enabled = ${carShareEnabled} WHERE user_id = ${String(req.params.id)}::uuid
+        `);
+      }
+      if (typeof intercityEnabled === "boolean") {
+        await rawDb.execute(rawSql`
+          UPDATE driver_details SET intercity_enabled = ${intercityEnabled} WHERE user_id = ${String(req.params.id)}::uuid
+        `);
+      }
       res.json({ success: true });
     } catch (e: any) { res.status(500).json({ message: safeErrMsg(e) }); }
   });
@@ -8924,7 +8984,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const r = await rawDb.execute(rawSql`
         SELECT u.*,
           dd.vehicle_category_id, dd.zone_id, dd.availability_status, dd.avg_rating as driver_rating, dd.total_trips as driver_total_trips,
-          dd.car_share_enabled,
+          dd.car_share_enabled, dd.intercity_enabled,
           vc.name as vehicle_category_name, vc.type as vehicle_category_type, vc.icon as vehicle_category_icon,
           vc.total_seats as vehicle_category_total_seats, vc.is_carpool as vehicle_category_is_carpool,
           z.name as zone_name,
@@ -8965,6 +9025,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         zone: d.zoneName || null,
         availabilityStatus: d.availabilityStatus || 'offline',
         carShareEnabled: d.carShareEnabled === true,
+        intercityEnabled: d.intercityEnabled === true,
         stats: {
           completedTrips: parseInt(d.completedTrips || "0"),
           totalEarned: parseFloat(d.totalEarned || "0"),
@@ -10785,6 +10846,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const effectiveIsScheduled = normalizedBookingState.isScheduled;
       const initialTripStatus = normalizedBookingState.currentStatus;
 
+      // -- Reject Car Share / Rolling Pool vehicles here — this endpoint only
+      // creates normal trip_requests rows for normal dispatch. Car Share
+      // must go through /api/app/customer/pool/book instead, which routes
+      // to rolling-pool.ts's matching engine and checks car_share_enabled.
+      // A carpool vehicleCategoryId reaching this endpoint (stale client,
+      // old app version, direct API call) would otherwise create a normal
+      // booking that normal dispatch matches by category alone, alerting
+      // ordinary online drivers instead of car_share_enabled ones.
+      if (vehicleCategoryId) {
+        const poolCheck = await rawDb.execute(rawSql`
+          SELECT COALESCE(is_carpool, false) AS is_carpool, COALESCE(service_type, 'ride') AS service_type
+          FROM vehicle_categories WHERE id = ${vehicleCategoryId}::uuid LIMIT 1
+        `).catch(() => ({ rows: [] as any[] }));
+        const poolRow = poolCheck.rows[0] as any;
+        if (poolRow && (poolRow.is_carpool === true || ["pool", "carpool"].includes(String(poolRow.service_type)))) {
+          return res.status(400).json({
+            message: "This vehicle is a Car Share vehicle. Please book through Car Share instead of a normal ride.",
+            code: "CAR_SHARE_VEHICLE_NOT_ALLOWED",
+          });
+        }
+      }
+
       // -- Service activation gate -------------------------------------------
       if (vehicleCategoryId) {
         const franchiseGuard = await getFranchiseServiceGuard(detectedBookingZoneId, vehicleCategoryId);
@@ -12261,6 +12344,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         JOIN vehicle_categories vc ON vc.id = f.vehicle_category_id
         WHERE 1=1
         ${vehicleCategoryId ? rawSql`AND f.vehicle_category_id = ${vehicleCategoryId}::uuid` : rawSql``}
+        -- Car Share / Rolling Pool vehicles must never appear as a normal-ride
+        -- fare option — Car Share has its own dedicated estimate/booking
+        -- endpoints (/api/app/customer/pool/estimate, /pool/book) that route
+        -- through rolling-pool.ts's matching engine. A carpool category
+        -- leaking into this normal-ride fare list let a customer "select Car
+        -- Share" here and get booked through normal trip_requests dispatch
+        -- instead, alerting ordinary online drivers rather than
+        -- car_share_enabled ones.
+        AND COALESCE(vc.is_carpool, false) = false
+        AND COALESCE(vc.service_type, 'ride') NOT IN ('pool', 'carpool')
         -- vehicle_categories.type stores the vehicle's own classification
         -- ("auto"/"car"/"motor_bike"/"parcel"), not a "ride"/"parcel"/"pool"
         -- service category. The customer app sends category="ride" for every
@@ -13644,7 +13737,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.patch("/api/app/driver/profile", authApp, async (req, res) => {
     try {
       const driver = (req as any).currentUser;
-      const { fullName, email, profileImage, gender, vehicleNumber, vehicleModel, vehicleCategoryId, carShareEnabled } = req.body;
+      const { fullName, email, profileImage, gender, vehicleNumber, vehicleModel, vehicleCategoryId, carShareEnabled, intercityEnabled } = req.body;
       // Update user fields
       if (fullName) await rawDb.execute(rawSql`UPDATE users SET full_name=${fullName}, updated_at=now() WHERE id=${driver.id}::uuid`);
       if (email) await rawDb.execute(rawSql`UPDATE users SET email=${email}, updated_at=now() WHERE id=${driver.id}::uuid`);
@@ -13689,6 +13782,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (typeof carShareEnabled === "boolean") {
         await rawDb.execute(rawSql`
           UPDATE driver_details SET car_share_enabled=${carShareEnabled} WHERE user_id=${driver.id}::uuid
+        `).catch(dbCatch("db"));
+      }
+      // Persistent "Enable Intercity?" flag — same pattern as Car Share,
+      // toggleable independently of the vehicle category itself.
+      if (typeof intercityEnabled === "boolean") {
+        await rawDb.execute(rawSql`
+          UPDATE driver_details SET intercity_enabled=${intercityEnabled} WHERE user_id=${driver.id}::uuid
         `).catch(dbCatch("db"));
       }
       res.json({ success: true, message: "Profile updated" });
@@ -14316,7 +14416,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // Accept both dateOfBirth (camelCase) and dob (Flutter sends 'dob')
       const dateOfBirth = req.body.dateOfBirth || req.body.dob || null;
       const { city, vehicleBrand, vehicleColor, vehicleYear, licenseNumber, licenseExpiry,
-        vehicleNumber, vehicleModel, vehicleType, selfieImage, gender: rawGender } = req.body;
+        vehicleNumber, vehicleModel, vehicleType, selfieImage, gender: rawGender, carShareEnabled, intercityEnabled } = req.body;
       // Accept both 'name' (Flutter) and 'fullName' for driver full name update
       const fullName = req.body.fullName || req.body.name || null;
       const password = req.body.password || null;
@@ -14407,20 +14507,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           // Single idempotent upsert (driver_details.user_id is UNIQUE) —
           // replaces the old separate INSERT-if-missing + UPDATE pair so a
           // retried request can never race itself into a duplicate row.
+          // carShareEnabled defaults to false when not submitted, preserving
+          // the backward-compatible default for every existing/new driver —
+          // only an explicit true/false from the registration form's "Enable
+          // Car Share?" step changes it, and an update-registration retry
+          // (no carShareEnabled in the payload) never resets an already-set
+          // value back to false.
+          const carShareEnabledValue = typeof carShareEnabled === "boolean" ? carShareEnabled : false;
+          const intercityEnabledValue = typeof intercityEnabled === "boolean" ? intercityEnabled : false;
           await tx.execute(rawSql`
             INSERT INTO driver_details (
               user_id, vehicle_category_id, availability_status, is_online, total_trips,
-              avg_rating, approval_state, service_eligibility, parcel_eligibility, updated_at
+              avg_rating, approval_state, service_eligibility, parcel_eligibility, car_share_enabled, intercity_enabled, updated_at
             )
             VALUES (
               ${user.id}::uuid, ${vehicleCategoryId}::uuid, 'offline', false, 0,
-              5.0, 'pending', ${sqlJsonArray(serviceEligibility)}, ${canCarryParcel}, now()
+              5.0, 'pending', ${sqlJsonArray(serviceEligibility)}, ${canCarryParcel}, ${carShareEnabledValue}, ${intercityEnabledValue}, now()
             )
             ON CONFLICT (user_id) DO UPDATE SET
               vehicle_category_id = ${vehicleCategoryId}::uuid,
               service_eligibility = ${sqlJsonArray(serviceEligibility)},
               parcel_eligibility = ${canCarryParcel},
               approval_state = COALESCE(NULLIF(driver_details.approval_state, ''), 'pending'),
+              car_share_enabled = ${typeof carShareEnabled === "boolean" ? rawSql`${carShareEnabled}` : rawSql`driver_details.car_share_enabled`},
+              intercity_enabled = ${typeof intercityEnabled === "boolean" ? rawSql`${intercityEnabled}` : rawSql`driver_details.intercity_enabled`},
               updated_at = now()
           `);
         }
@@ -15001,6 +15111,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             MIN(tf.fare_per_km) as fare_per_km, MIN(tf.helper_charge) as helper_charge
           FROM vehicle_categories vc
           LEFT JOIN trip_fares tf ON tf.vehicle_category_id = vc.id
+          WHERE COALESCE(vc.is_carpool, false) = false
+            AND COALESCE(vc.service_type, 'ride') NOT IN ('pool', 'carpool')
           GROUP BY vc.id, vc.name, vc.type, vc.icon, vc.is_active
           ORDER BY CASE vc.type WHEN 'ride' THEN 1 WHEN 'parcel' THEN 2 WHEN 'cargo' THEN 3 ELSE 4 END, vc.name
         `),
@@ -15034,6 +15146,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const serverDist = haversineKm(pLat.lat, pLat.lng, dLat.lat, dLat.lng);
       let serverFare = Math.max(30 + 12 * serverDist, 30);
       if (vehicleCategoryId) {
+        // Same Car Share guard as /book-ride — a scheduled ride is still a
+        // normal trip_requests row headed for normal dispatch, never Rolling Pool.
+        const poolCheck = await rawDb.execute(rawSql`
+          SELECT COALESCE(is_carpool, false) AS is_carpool, COALESCE(service_type, 'ride') AS service_type
+          FROM vehicle_categories WHERE id = ${vehicleCategoryId}::uuid LIMIT 1
+        `).catch(() => ({ rows: [] as any[] }));
+        const poolRow = poolCheck.rows[0] as any;
+        if (poolRow && (poolRow.is_carpool === true || ["pool", "carpool"].includes(String(poolRow.service_type)))) {
+          return res.status(400).json({
+            message: "This vehicle is a Car Share vehicle and cannot be scheduled as a normal ride.",
+            code: "CAR_SHARE_VEHICLE_NOT_ALLOWED",
+          });
+        }
         const fareConfig = await rawDb.execute(rawSql`
           SELECT base_fare, fare_per_km, minimum_fare FROM trip_fares
           WHERE vehicle_category_id = ${vehicleCategoryId}::uuid
