@@ -15,6 +15,7 @@ import '../../services/auth_service.dart';
 import '../../services/socket_service.dart';
 import '../tracking/tracking_screen.dart';
 import '../tracking/trip_completion_screen.dart';
+import '../tracking/local_pool_status_screen.dart';
 import '../booking/parcel_booking_screen.dart';
 import '../booking/premium_location_screen.dart';
 import '../../services/trip_service.dart';
@@ -47,6 +48,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<Map<String, dynamic>> _recentTrips = [];
   Map<String, dynamic>? _activeTrip;
   Map<String, dynamic>? _activeParcel;
+  Map<String, dynamic>? _activePoolBooking;
+  Map<String, dynamic>? _activeOutstationBooking;
   StreamSubscription? _driverAssignedSub;
   StreamSubscription? _tripCancelledSub;
   StreamSubscription? _tripStatusSub;
@@ -397,6 +400,58 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     if (_activeTrip != null) return;
     await _checkPendingRecovery();
+    if (!mounted) return;
+    if (_activeTrip != null) return;
+    await _checkActivePoolBooking();
+    if (!mounted) return;
+    if (_activePoolBooking != null) return;
+    await _checkActiveOutstationBooking();
+  }
+
+  // Car Share: mirrors _checkActiveTrip's role for normal rides, via the
+  // dedicated /pool/active endpoint (Rolling Pool has no per-user "current
+  // trip" concept the way trip_requests does, so this doesn't reuse
+  // _checkActiveTrip's query — it's a separate booking system entirely).
+  Future<void> _checkActivePoolBooking() async {
+    if (_activeTrip != null) return;
+    try {
+      final headers = await AuthService.getHeaders();
+      final r = await http
+          .get(Uri.parse(ApiConfig.localPoolActive), headers: headers)
+          .timeout(const Duration(seconds: 10));
+      if (!mounted) return;
+      if (r.statusCode == 401) {
+        _handleUnauthorized();
+        return;
+      }
+      if (r.statusCode != 200) return;
+      final data = jsonDecode(r.body) as Map<String, dynamic>;
+      final payload = data['data'] as Map<String, dynamic>?;
+      if (payload?['active'] == true) {
+        setState(() => _activePoolBooking = payload!['booking'] as Map<String, dynamic>?);
+      }
+    } catch (_) {}
+  }
+
+  // Intercity / Outstation Pool: same idea, via /outstation-pool/v2/active.
+  Future<void> _checkActiveOutstationBooking() async {
+    if (_activeTrip != null || _activePoolBooking != null) return;
+    try {
+      final headers = await AuthService.getHeaders();
+      final r = await http
+          .get(Uri.parse(ApiConfig.outstationPoolActive), headers: headers)
+          .timeout(const Duration(seconds: 10));
+      if (!mounted) return;
+      if (r.statusCode == 401) {
+        _handleUnauthorized();
+        return;
+      }
+      if (r.statusCode != 200) return;
+      final data = jsonDecode(r.body) as Map<String, dynamic>;
+      if (data['active'] == true) {
+        setState(() => _activeOutstationBooking = data['booking'] as Map<String, dynamic>?);
+      }
+    } catch (_) {}
   }
 
   Future<void> _checkPendingRecovery() async {
@@ -744,6 +799,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             const Duration(seconds: 10), (_) => _fetchNearbyDrivers());
         _fetchNearbyDrivers(); // refresh immediately on resume
       }
+      // Previously active-trip recovery only ran once, from initState — a
+      // background→foreground resume (the common case: lock screen, app
+      // switcher, a phone call) never re-checked, so a booking made just
+      // before backgrounding, or one whose status changed while backgrounded
+      // and the socket was suspended, wouldn't be reflected until a full
+      // cold restart. The backend remains the source of truth either way —
+      // this just re-asks it on every resume, same as on launch.
+      _checkActiveTripAndRecovery();
+      _checkActiveParcel();
     }
   }
 
@@ -1446,6 +1510,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       child: _buildActiveParcelBanner(),
                     ),
                   ],
+                  if (_activeTrip == null && _activeParcel == null && _activePoolBooking != null) ...[
+                    const SizedBox(height: 12),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: _buildActivePoolBanner(),
+                    ),
+                  ],
+                  if (_activeTrip == null && _activeParcel == null && _activePoolBooking == null && _activeOutstationBooking != null) ...[
+                    const SizedBox(height: 12),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: _buildActiveOutstationBanner(),
+                    ),
+                  ],
 
                   const SizedBox(height: 32),
                     
@@ -2097,6 +2175,130 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     color: bannerColor,
                     fontWeight: FontWeight.w400,
                     fontSize: 12)),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _buildActivePoolBanner() {
+    final booking = _activePoolBooking!;
+    final status = booking['status']?.toString() ?? 'searching';
+    final requestId = booking['id']?.toString() ?? '';
+    final driverName = booking['driverName']?.toString() ?? booking['driver_name']?.toString() ?? '';
+    final pickup = booking['pickupAddress']?.toString() ?? booking['pickup_address']?.toString() ?? 'pickup';
+    final drop = booking['dropAddress']?.toString() ?? booking['drop_address']?.toString() ?? 'destination';
+    final isSearching = status == 'searching';
+    final bannerColor = isSearching ? JT.primaryDark : JT.primary;
+
+    final statusLabel = {
+          'searching': 'Finding your Car Share driver...',
+          'pending_driver_accept': 'Confirming your driver...',
+          'matched': 'Driver matched',
+          'picked_up': 'Car Share trip in progress',
+        }[status] ??
+        'Car Share active';
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: bannerColor.withValues(alpha: 0.20)),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 16, offset: const Offset(0, 4))
+        ],
+      ),
+      child: Row(children: [
+        Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(color: bannerColor.withValues(alpha: 0.10), shape: BoxShape.circle),
+          child: Icon(isSearching ? Icons.search_rounded : Icons.groups_rounded, color: bannerColor, size: 22),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(statusLabel, style: GoogleFonts.poppins(color: JT.textPrimary, fontWeight: FontWeight.w500, fontSize: 14)),
+          Text(
+              isSearching
+                  ? '$pickup → $drop'
+                  : '${driverName.isNotEmpty ? '$driverName · ' : ''}$pickup → $drop',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.poppins(color: JT.textSecondary, fontSize: 11, fontWeight: FontWeight.w500)),
+        ])),
+        GestureDetector(
+          onTap: () {
+            if (requestId.isEmpty) return;
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => LocalPoolStatusScreen(requestId: requestId, pickupAddress: pickup, dropAddress: drop),
+              ),
+            );
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(color: bannerColor.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(10)),
+            child: Text('Track →', style: GoogleFonts.poppins(color: bannerColor, fontWeight: FontWeight.w400, fontSize: 12)),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _buildActiveOutstationBanner() {
+    final booking = _activeOutstationBooking!;
+    final status = booking['status']?.toString() ?? 'confirmed';
+    final fromCity = booking['fromCity']?.toString() ?? booking['from_city']?.toString() ?? 'origin';
+    final toCity = booking['toCity']?.toString() ?? booking['to_city']?.toString() ?? 'destination';
+    final seats = booking['seatsBooked'] ?? booking['seats_booked'];
+    final bookingMode = booking['bookingMode']?.toString() ?? booking['booking_mode']?.toString() ?? 'seat';
+    final driverName = booking['driverName']?.toString() ?? booking['driver_name']?.toString() ?? '';
+    final isOngoing = status == 'picked_up';
+    final bannerColor = isOngoing ? JT.primary : JT.primaryDark;
+    final modeLabel = bookingMode == 'whole_car' ? 'Whole Car' : (seats != null ? '$seats seat${seats.toString() == '1' ? '' : 's'}' : '');
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: bannerColor.withValues(alpha: 0.20)),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 16, offset: const Offset(0, 4))
+        ],
+      ),
+      child: Row(children: [
+        Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(color: bannerColor.withValues(alpha: 0.10), shape: BoxShape.circle),
+          child: Icon(isOngoing ? Icons.directions_car_rounded : Icons.alt_route_rounded, color: bannerColor, size: 22),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(isOngoing ? 'Intercity trip in progress' : 'Intercity booking confirmed',
+              style: GoogleFonts.poppins(color: JT.textPrimary, fontWeight: FontWeight.w500, fontSize: 14)),
+          Text(
+              '$fromCity → $toCity${modeLabel.isNotEmpty ? ' · $modeLabel' : ''}${driverName.isNotEmpty ? ' · $driverName' : ''}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.poppins(color: JT.textSecondary, fontSize: 11, fontWeight: FontWeight.w500)),
+        ])),
+        GestureDetector(
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const OutstationPoolScreen(initialTab: 1)),
+            );
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(color: bannerColor.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(10)),
+            child: Text('Track →', style: GoogleFonts.poppins(color: bannerColor, fontWeight: FontWeight.w400, fontSize: 12)),
           ),
         ),
       ]),

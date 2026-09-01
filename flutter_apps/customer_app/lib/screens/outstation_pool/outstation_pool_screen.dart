@@ -8,7 +8,11 @@ import '../../config/jago_theme.dart';
 import '../../services/auth_service.dart';
 
 class OutstationPoolScreen extends StatefulWidget {
-  const OutstationPoolScreen({super.key});
+  // 0 = Search Rides, 1 = My Bookings — lets a caller (e.g. resuming an
+  // active booking from Home) land directly on the bookings tab instead of
+  // always starting on search.
+  final int initialTab;
+  const OutstationPoolScreen({super.key, this.initialTab = 0});
   @override
   State<OutstationPoolScreen> createState() => _OutstationPoolScreenState();
 }
@@ -20,7 +24,7 @@ class _OutstationPoolScreenState extends State<OutstationPoolScreen>
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 2, vsync: this);
+    _tabs = TabController(length: 2, vsync: this, initialIndex: widget.initialTab.clamp(0, 1));
   }
 
   @override

@@ -29,6 +29,7 @@ class _TripsHistoryScreenState extends State<TripsHistoryScreen>
 
   // Summary stats
   double _totalEarnings = 0;
+  int _activeCount = 0;
   int _completedCount = 0;
   int _cancelledCount = 0;
 
@@ -47,10 +48,10 @@ class _TripsHistoryScreenState extends State<TripsHistoryScreen>
   @override
   void initState() {
     super.initState();
-    _tabCtrl = TabController(length: 3, vsync: this);
+    _tabCtrl = TabController(length: 4, vsync: this);
     _tabCtrl.addListener(() {
       if (_tabCtrl.indexIsChanging) return;
-      final filters = ['All', 'Completed', 'Cancelled'];
+      final filters = ['All', 'Active', 'Completed', 'Cancelled'];
       setState(() { _activeFilter = filters[_tabCtrl.index]; });
       _onTabChanged();
     });
@@ -65,6 +66,7 @@ class _TripsHistoryScreenState extends State<TripsHistoryScreen>
   }
 
   String? get _statusParam => switch (_activeFilter) {
+        'Active' => 'active',
         'Completed' => 'completed',
         'Cancelled' => 'cancelled',
         _ => null,
@@ -139,10 +141,12 @@ class _TripsHistoryScreenState extends State<TripsHistoryScreen>
       final results = await Future.wait([
         http.get(Uri.parse('${ApiConfig.driverTrips}?limit=1&status=completed'), headers: headers),
         http.get(Uri.parse('${ApiConfig.driverTrips}?limit=1&status=cancelled'), headers: headers),
+        http.get(Uri.parse('${ApiConfig.driverTrips}?limit=1&status=active'), headers: headers),
       ]);
       if (!mounted) return;
       final completedData = results[0].statusCode == 200 ? jsonDecode(results[0].body) : null;
       final cancelledData = results[1].statusCode == 200 ? jsonDecode(results[1].body) : null;
+      final activeData = results[2].statusCode == 200 ? jsonDecode(results[2].body) : null;
       double earnings = 0;
       for (final t in _allTrips) {
         final status = t['currentStatus'] ?? t['status'] ?? '';
@@ -157,6 +161,9 @@ class _TripsHistoryScreenState extends State<TripsHistoryScreen>
         _cancelledCount = cancelledData != null
             ? (cancelledData['total'] is int ? cancelledData['total'] as int : int.tryParse('${cancelledData['total']}') ?? 0)
             : _cancelledCount;
+        _activeCount = activeData != null
+            ? (activeData['total'] is int ? activeData['total'] as int : int.tryParse('${activeData['total']}') ?? 0)
+            : _activeCount;
         _totalEarnings = earnings;
       });
     } catch (_) {
@@ -560,6 +567,7 @@ class _TripsHistoryScreenState extends State<TripsHistoryScreen>
                   unselectedLabelStyle: GoogleFonts.poppins(fontWeight: FontWeight.w500, fontSize: 12),
                   tabs: [
                     Tab(text: 'All (${_allTrips.length})'),
+                    Tab(text: 'Active ($_activeCount)'),
                     Tab(text: 'Done ($_completedCount)'),
                     Tab(text: 'Cancelled ($_cancelledCount)'),
                   ],

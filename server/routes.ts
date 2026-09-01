@@ -10271,15 +10271,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const driver = (req as any).currentUser;
       const { status, limit = 20, offset = 0 } = req.query;
+      // status=active is a synthetic value (not a real current_status) for
+      // the Trip History "Active" tab — anything not in the two terminal
+      // states, same rule /active-trip and the duplicate-booking guard use.
+      const statusClause =
+        status === "active"
+          ? rawSql`AND t.current_status NOT IN ('completed', 'cancelled')`
+          : status
+            ? rawSql`AND t.current_status = ${status as string}`
+            : rawSql``;
+      const statusClauseNoAlias =
+        status === "active"
+          ? rawSql`AND current_status NOT IN ('completed', 'cancelled')`
+          : status
+            ? rawSql`AND current_status = ${status as string}`
+            : rawSql``;
       const r = await rawDb.execute(rawSql`
         SELECT t.*, c.full_name as customer_name, c.phone as customer_phone
         FROM trip_requests t
         LEFT JOIN users c ON c.id = t.customer_id
         WHERE t.driver_id = ${driver.id}::uuid
-        ${status ? rawSql`AND t.current_status = ${status as string}` : rawSql``}
+        ${statusClause}
         ORDER BY t.created_at DESC LIMIT ${Number(limit)} OFFSET ${Number(offset)}
       `);
-      const cnt = await rawDb.execute(rawSql`SELECT COUNT(*) as total FROM trip_requests WHERE driver_id=${driver.id}::uuid ${status ? rawSql`AND current_status=${status as string}` : rawSql``}`);
+      const cnt = await rawDb.execute(rawSql`SELECT COUNT(*) as total FROM trip_requests WHERE driver_id=${driver.id}::uuid ${statusClauseNoAlias}`);
       const trips = camelize(r.rows);
       res.json({ trips, total: Number((cnt.rows[0] as any).total) });
     } catch (e: any) { res.status(500).json({ message: safeErrMsg(e) }); }

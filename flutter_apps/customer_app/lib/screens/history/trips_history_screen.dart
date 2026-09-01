@@ -9,6 +9,7 @@ import '../../src/core/config/api_config.dart';
 import '../../services/auth_service.dart';
 import '../booking/booking_screen.dart';
 import '../main_screen.dart';
+import '../tracking/tracking_screen.dart';
 
 class TripsHistoryScreen extends StatefulWidget {
   const TripsHistoryScreen({super.key});
@@ -109,14 +110,26 @@ class _TripsHistoryScreenState extends State<TripsHistoryScreen>
     }
   }
 
+  // A trip is active when its status isn't one of the two terminal states —
+  // matches the same rule the backend's /active-trip endpoint and the
+  // duplicate-booking guard (ACTIVE_TRIP_STATUSES) already use, so this
+  // never drifts from what the server considers "still open."
+  static bool _isActiveStatus(String s) => s != 'completed' && s != 'cancelled' && s.isNotEmpty;
+
   List<dynamic> get _filtered {
     if (_filter == 'all') return _trips;
+    if (_filter == 'active') {
+      return _trips.where((t) => _isActiveStatus((t['currentStatus'] ?? t['status'] ?? '').toString())).toList();
+    }
     return _trips.where((t) {
       final s = (t['currentStatus'] ?? t['status'] ?? '').toString();
       return s == _filter;
     }).toList();
   }
 
+  int get _activeCount => _trips
+      .where((t) => _isActiveStatus((t['currentStatus'] ?? t['status'] ?? '').toString()))
+      .length;
   int get _completedCount => _trips
       .where((t) => (t['currentStatus'] ?? t['status'] ?? '') == 'completed')
       .length;
@@ -561,6 +574,8 @@ class _TripsHistoryScreenState extends State<TripsHistoryScreen>
                             child: Row(children: [
                               _filterChip('all', 'All'),
                               const SizedBox(width: 8),
+                              _filterChip('active', 'Active'),
+                              const SizedBox(width: 8),
                               _filterChip('completed', 'Completed'),
                               const SizedBox(width: 8),
                               _filterChip('cancelled', 'Cancelled'),
@@ -573,7 +588,7 @@ class _TripsHistoryScreenState extends State<TripsHistoryScreen>
                           padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
                           child: Row(
                             children: [
-                              _headerStat('${_trips.length}', 'Total Trips', Icons.swap_calls_rounded, JT.primary),
+                              _headerStat('$_activeCount', 'Active', Icons.radio_button_checked_rounded, JT.primary),
                               const SizedBox(width: 10),
                               _headerStat('$_completedCount', 'Completed', Icons.check_circle_rounded, const Color(0xFF10B981)), // green
                               const SizedBox(width: 10),
@@ -949,6 +964,26 @@ class _TripsHistoryScreenState extends State<TripsHistoryScreen>
             ]),
           ]),
         ),
+        if (!isCompleted && !isCancelled) ...[
+          Container(height: 1, color: const Color(0xFFF1F5F9)),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+            child: SizedBox(
+              width: double.infinity,
+              child: _actionButton(
+                icon: Icons.my_location_rounded,
+                label: 'Track Trip',
+                filled: true,
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => TrackingScreen(tripId: (t['id'] ?? t['tripId'] ?? '').toString()),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
         if (isCompleted) ...[
           Container(height: 1, color: const Color(0xFFF1F5F9)),
           Padding(

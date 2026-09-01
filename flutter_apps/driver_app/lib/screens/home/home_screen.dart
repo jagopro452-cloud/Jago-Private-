@@ -461,6 +461,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     if (state == AppLifecycleState.resumed) {
       _consumeQueuedAlertAction();
       _checkPendingFcmTrip();
+      // Previously this only ran once from initState (cold start) — a
+      // background→foreground resume never re-checked, so an accepted
+      // trip/pool session/outstation ride whose status changed while
+      // backgrounded wouldn't be reflected until a full restart. Safe to
+      // call repeatedly: it's a no-op unless it actually finds something
+      // to resume into.
+      _recoverActiveTrip();
     }
     if (state == AppLifecycleState.paused) {
       // App backgrounded — suspend GPS stream + server poll to save battery
