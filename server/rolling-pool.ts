@@ -709,6 +709,7 @@ async function matchRequest(requestId: string): Promise<boolean> {
   // how to handle this (_isPoolAlert matches any type starting with
   // "pool_" and persists it for the incoming-alert UI) — it was simply
   // never sent for this specific event.
+  const fcmTokenForLog = await getLatestFcmToken(match.driverId);
   const fcmSent = await sendPoolPush(
     match.driverId,
     "New Car Share passenger",
@@ -730,7 +731,15 @@ async function matchRequest(requestId: string): Promise<boolean> {
       totalFare: String(parseFloat(updReq.total_fare)),
     },
   );
-  console.log("[CAR_SHARE_FCM_SENT]", JSON.stringify({ driverId: match.driverId, requestId, fcmSent }));
+  // Distinguishes "no FCM token on file for this driver" (device never
+  // registered one — same lookup normal ride dispatch uses, so this driver
+  // would also miss FCM'd normal-ride alerts) from "token existed but the
+  // send itself failed" (bad/expired token, FCM API error, etc).
+  console.log("[CAR_SHARE_FCM_SENT]", JSON.stringify({
+    driverId: match.driverId, requestId, fcmSent,
+    hadFcmToken: !!fcmTokenForLog,
+    reason: fcmSent ? "sent" : (fcmTokenForLog ? "send_failed" : "no_fcm_token_on_file"),
+  }));
 
   // Notify customer that a compatible active pool vehicle is being confirmed.
   const driverInfoR = await rawDb.execute(rawSql`
