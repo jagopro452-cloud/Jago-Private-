@@ -434,6 +434,31 @@ async function findBestSession(
   const directionToleranceDeg = await getPoolSettingNumber("local_pool_direction_tolerance_deg", DIRECTION_TOLERANCE_DEG);
   const categoryClause = await buildPoolCategoryClause(vehicleCategoryId);
 
+  // TEMP DEBUG — CAR_SHARE_ELIGIBLE_DRIVERS: unfiltered active-session count,
+  // so a zero here (vs. zero after radius/category filtering below) tells us
+  // whether the problem is "no driver has started a pool session at all" vs.
+  // "sessions exist but none are close enough / right category."
+  const allActiveR = await rawDb.execute(rawSql`
+    SELECT dps.id, dps.driver_id, dps.status, dps.accepting_new_requests, dps.available_seats,
+           dps.current_lat, dps.current_lng, dps.vehicle_category_id, dps.created_at
+    FROM driver_pool_sessions dps
+    WHERE dps.status = 'active'
+  `).catch(() => ({ rows: [] as any[] }));
+  console.log("[CAR_SHARE_ELIGIBLE_DRIVERS]", JSON.stringify({
+    totalActiveSessions: allActiveR.rows.length,
+    seatsNeeded,
+    requestedVehicleCategoryId: vehicleCategoryId || null,
+    sessions: (allActiveR.rows as any[]).map((s) => ({
+      sessionId: s.id,
+      driverId: s.driver_id,
+      acceptingNewRequests: s.accepting_new_requests,
+      availableSeats: s.available_seats,
+      hasLocation: s.current_lat != null && s.current_lng != null,
+      vehicleCategoryId: s.vehicle_category_id,
+      sessionAgeSec: Math.round((Date.now() - new Date(s.created_at).getTime()) / 1000),
+    })),
+  }));
+
   const r = await rawDb.execute(rawSql`
     SELECT dps.id, dps.driver_id, dps.available_seats,
            dps.current_lat, dps.current_lng, dps.current_bearing_deg,
@@ -461,6 +486,10 @@ async function findBestSession(
     ) ASC
     LIMIT 10
   `).catch(() => ({ rows: [] as any[] }));
+  console.log("[CAR_SHARE_MATCHING_STARTED]", JSON.stringify({
+    radiusFilteredSessionCount: r.rows.length,
+    maxMatchRadiusKm, maxDetourKm, directionToleranceDeg,
+  }));
 
   const candidates: { sessionId: string; driverId: string; distKm: number }[] = [];
   for (const row of r.rows as any[]) {
@@ -471,14 +500,26 @@ async function findBestSession(
       const driverBearing = parseFloat(row.current_bearing_deg);
       if (!isNaN(driverBearing)) {
         const bdiff = bearingDiff(driverBearing, customerBearing);
-        if (bdiff > directionToleranceDeg) continue;
+        if (bdiff > directionToleranceDeg) {
+          console.log("[CAR_SHARE_DRIVER_REJECTED]", JSON.stringify({
+            driverId: row.driver_id, sessionId: row.id,
+            rejectionReason: "direction_mismatch", bearingDiffDeg: Math.round(bdiff), directionToleranceDeg,
+          }));
+          continue;
+        }
       }
     }
 
     const cLat = parseFloat(row.current_lat);
     const cLng = parseFloat(row.current_lng);
     const extra = detourKm(cLat, cLng, pickupLat, pickupLng, dropLat, dropLng);
-    if (extra > maxDetourKm) continue;
+    if (extra > maxDetourKm) {
+      console.log("[CAR_SHARE_DRIVER_REJECTED]", JSON.stringify({
+        driverId: row.driver_id, sessionId: row.id,
+        rejectionReason: "detour_too_large", extraDetourKm: Math.round(extra * 10) / 10, maxDetourKm,
+      }));
+      continue;
+    }
 
     candidates.push({
       sessionId: String(row.id),
@@ -487,6 +528,7 @@ async function findBestSession(
     });
   }
 
+  console.log("[CAR_SHARE_MATCHING_STARTED] final candidate count:", candidates.length);
   if (!candidates.length) return null;
   if (candidates.length === 1) return { sessionId: candidates[0].sessionId, driverId: candidates[0].driverId };
 
@@ -515,11 +557,15 @@ async function findBestSession(
 }
 
 async function matchRequest(requestId: string): Promise<boolean> {
+  console.log("[CAR_SHARE_MATCHING_STARTED] requestId:", requestId);
   const reqR = await rawDb.execute(rawSql`
     SELECT * FROM pool_ride_requests WHERE id = ${requestId}::uuid AND status = 'searching' LIMIT 1
   `).catch(() => ({ rows: [] as any[] }));
   const req = reqR.rows[0] as any;
-  if (!req) return false;
+  if (!req) {
+    console.log("[CAR_SHARE_MATCHING_STARTED] request not found or not in 'searching' status — requestId:", requestId);
+    return false;
+  }
 
   const match = await findBestSession(
     parseFloat(req.pickup_lat), parseFloat(req.pickup_lng),
@@ -527,8 +573,14 @@ async function matchRequest(requestId: string): Promise<boolean> {
     parseInt(req.seats_requested),
     req.vehicle_category_id || null,
   );
-  if (!match) return false;
-  if (await hasActivePoolBlock(String(req.customer_id), String(match.driverId))) return false;
+  if (!match) {
+    console.log("[CAR_SHARE_DRIVER_REJECTED] no candidate session survived matching — requestId:", requestId);
+    return false;
+  }
+  if (await hasActivePoolBlock(String(req.customer_id), String(match.driverId))) {
+    console.log("[CAR_SHARE_DRIVER_REJECTED]", JSON.stringify({ driverId: match.driverId, requestId, rejectionReason: "active_block_between_customer_and_driver" }));
+    return false;
+  }
 
   // Atomically assign request to session and decrement available_seats
   let assignedPickupOrder = 1;
@@ -628,6 +680,7 @@ async function matchRequest(requestId: string): Promise<boolean> {
   logDriverOffer(match.driverId, requestId, parseFloat(req.pickup_lat), parseFloat(req.pickup_lng), "local_pool").catch(() => undefined);
 
   // Notify driver of new passenger
+  console.log("[CAR_SHARE_ALERT_SENT]", JSON.stringify({ driverId: match.driverId, sessionId: match.sessionId, requestId }));
   io.to(`user:${match.driverId}`).emit("pool:new_passenger", {
     requestId,
     sessionId: match.sessionId,
@@ -645,6 +698,31 @@ async function matchRequest(requestId: string): Promise<boolean> {
     expiresInSeconds: DRIVER_ACCEPT_TIMEOUT_SEC,
     requiresDriverAccept: true,
   });
+  console.log("[CAR_SHARE_SOCKET_SENT]", JSON.stringify({ driverId: match.driverId, requestId, room: `user:${match.driverId}` }));
+
+  // BUG FIX: this was socket-only — a driver whose app is backgrounded or
+  // has a dropped socket connection (the normal state while idly waiting
+  // for a match) never received anything at all, unlike every other
+  // driver-facing alert in this codebase (normal ride dispatch, Outstation
+  // Pool) which always pairs the socket event with an FCM push as a
+  // wake-the-app fallback. The driver app's fcm_service.dart already knows
+  // how to handle this (_isPoolAlert matches any type starting with
+  // "pool_" and persists it for the incoming-alert UI) — it was simply
+  // never sent for this specific event.
+  const fcmSent = await sendPoolPush(
+    match.driverId,
+    "New Car Share passenger",
+    `${updReq.customer_name || "A passenger"} wants to share your ride — ${parseInt(req.seats_requested)} seat(s).`,
+    {
+      type: "pool_new_passenger",
+      module: "local_pool",
+      referenceId: requestId,
+      requestId,
+      sessionId: match.sessionId,
+      expiresInSeconds: String(DRIVER_ACCEPT_TIMEOUT_SEC),
+    },
+  );
+  console.log("[CAR_SHARE_FCM_SENT]", JSON.stringify({ driverId: match.driverId, requestId, fcmSent }));
 
   // Notify customer that a compatible active pool vehicle is being confirmed.
   const driverInfoR = await rawDb.execute(rawSql`
@@ -1487,6 +1565,10 @@ export function registerRollingPoolRoutes(app: Express, authApp: any, requireAdm
         vehicleCategoryId,
         paymentMethod = "cash",
       } = req.body;
+      console.log("[CAR_SHARE_BOOK_REQUEST_RECEIVED]", JSON.stringify({
+        customerId: customer?.id, seatsRequested, vehicleCategoryId: vehicleCategoryId || null,
+        hasCoords: !!(pickupLat && pickupLng && dropLat && dropLng),
+      }));
 
       if (!pickupLat || !pickupLng || !dropLat || !dropLng) {
         return res.status(400).json(poolResponse(false, "POOL_COORDS_REQUIRED", "Pickup and drop coordinates required"));
@@ -1586,6 +1668,7 @@ export function registerRollingPoolRoutes(app: Express, authApp: any, requireAdm
         RETURNING id
       `);
       const requestId = String((r.rows[0] as any).id);
+      console.log("[CAR_SHARE_BOOKING_CREATED]", JSON.stringify({ requestId, customerId: customer.id, seats, status: "searching" }));
 
       // Try immediate match
       const matched = await matchRequest(requestId);
