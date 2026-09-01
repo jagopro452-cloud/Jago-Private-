@@ -720,6 +720,14 @@ async function matchRequest(requestId: string): Promise<boolean> {
       requestId,
       sessionId: match.sessionId,
       expiresInSeconds: String(DRIVER_ACCEPT_TIMEOUT_SEC),
+      // Mirrors the pool:new_passenger socket payload so the driver app's
+      // incoming-offer alert can render fully from the FCM data alone when
+      // woken from background, without an extra round-trip.
+      customerName: updReq.customer_name || "Passenger",
+      pickupAddress: req.pickup_address || "",
+      dropAddress: req.drop_address || "",
+      seatsRequested: String(parseInt(req.seats_requested)),
+      totalFare: String(parseFloat(updReq.total_fare)),
     },
   );
   console.log("[CAR_SHARE_FCM_SENT]", JSON.stringify({ driverId: match.driverId, requestId, fcmSent }));
