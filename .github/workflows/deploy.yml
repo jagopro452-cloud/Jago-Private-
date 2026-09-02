@@ -143,12 +143,18 @@ jobs:
             ls -t "$BACKUP_DIR"/*.sql.gz 2>/dev/null | tail -n +11 | xargs -r rm -f
 
             # ── 2. Restart (EC2 performs no compilation - dist/ and node_modules/
-            # arrived pre-built via rsync). Uses ecosystem.config.cjs so PM2 runs the
-            # configured cluster-mode setup instead of a raw single-instance fork-mode
-            # process. startOrReload matches the running process by the "name" field
-            # in ecosystem.config.cjs (jago-server) and does a graceful reload if it's
-            # already running, or a fresh start otherwise — no duplicate process. ──
-            pm2 startOrReload ecosystem.config.cjs --env production
+            # arrived pre-built via rsync). Uses ecosystem.config.cjs (fork mode —
+            # see that file's own comment for why not cluster) so PM2 runs the
+            # configured setup instead of some ad hoc process. startOrReload matches
+            # the running process by the "name" field in ecosystem.config.cjs
+            # (jago-server) and does a graceful reload if it's already running, or a
+            # fresh start otherwise — no duplicate process.
+            # --update-env: confirmed in production (2026-09-02) that a reload
+            # without this flag reuses PM2's originally-cached environment rather
+            # than the one just sourced above two lines up — meaning secret rotation
+            # (or any .env change at all) silently never reaches the running process
+            # until something forces a full pm2 delete + start. ──
+            pm2 startOrReload ecosystem.config.cjs --env production --update-env
             pm2 save
             sleep 8
 

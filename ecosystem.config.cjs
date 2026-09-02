@@ -12,12 +12,25 @@
 // path that doesn't exist on this host (an earlier revision pointed at
 // /var/www/jago/.env, used only by the deprecated deploy-production.sh
 // path) would make Node fail to start.
+//
+// exec_mode is 'fork', not 'cluster' — confirmed in production (2026-09-02)
+// that PM2 cluster mode on this host does NOT reliably pass the invoking
+// shell's environment through to the forked worker (DATABASE_URL and every
+// other secret ended up completely absent from the running process's
+// /proc/<pid>/environ, even with --update-env), leaving the app hung
+// indefinitely trying to reach a database with no connection string —
+// no crash, no log output, just silence. Fork mode does not have this
+// problem. This box is single-vCPU anyway, so cluster mode's only real
+// benefit (multi-core load balancing) was never applicable here.
+// instances is pinned to 1, not 'max' — fork mode has no shared-port
+// balancer the way cluster mode does, so more than one fork instance would
+// fight over binding port 5000.
 module.exports = {
   apps: [{
     name: 'jago-server',
     script: 'dist/index.js',
-    instances: 'max',
-    exec_mode: 'cluster',
+    instances: 1,
+    exec_mode: 'fork',
     wait_ready: false,
     listen_timeout: 15000,
     // Must exceed server/index.ts's SHUTDOWN_TIMEOUT_MS (30000) — otherwise
