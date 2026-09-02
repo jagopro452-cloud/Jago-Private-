@@ -15038,7 +15038,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       // Get vehicle + zone + online status
       const driverInfo = await rawDb.execute(rawSql`
-        SELECT dd.vehicle_category_id, dd.availability_status,
+        SELECT dd.vehicle_category_id, dd.availability_status, dd.car_share_enabled,
           vc.name as vehicle_category_name, vc.icon as vehicle_category_icon, vc.type as vehicle_type,
           z.name as zone_name, dl.is_online,
           u.vehicle_number, u.vehicle_model
@@ -15080,6 +15080,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       res.json({
         isOnline: di.isOnline ?? false,
+        carShareEnabled: di.carShareEnabled === true,
         tripsToday: todayTrips,
         earningsToday: todayGross - todayCommission,
         walletBalance: parseFloat((walletRow.rows[0] as any)?.wallet_balance || 0),

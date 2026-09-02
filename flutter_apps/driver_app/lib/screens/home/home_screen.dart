@@ -39,6 +39,10 @@ import '../local_pool/local_pool_screen.dart';
 import '../outstation_pool/outstation_pool_trip_screen.dart';
 import '../outstation_pool/outstation_pool_availability_screen.dart';
 
+/// The single source of truth for which ride requests a driver can receive.
+/// Never stored directly — see `_HomeScreenState._driverMode`.
+enum DriverServiceMode { cab, offline, carShare }
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
   @override
@@ -53,7 +57,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
   double _selfHeading = 0;
   BitmapDescriptor? _selfIcon;
   bool _isOnline = false;
-  bool _toggling = false;
+  bool _carShareEnabled = false;
+  bool _modeSwitching = false;
   bool _socketConnected = false;
   String _userName = 'Pilot';
   String _userPhone = '';
@@ -403,7 +408,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     // so it surfaces through the same IncomingOffersOverlay regardless of
     // which screen is showing.
     _subs.add(_socket.onPoolNewPassenger.listen((offer) {
-      if (!mounted) return;
+      if (!mounted || !_carShareEnabled) return;
       if (_incomingPoolOffer != null) return;
       setState(() => _incomingPoolOffer = offer);
     }));
@@ -718,6 +723,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         if (!mounted) return;
         setState(() {
           _isOnline = data['isOnline'] ?? false;
+          _carShareEnabled = data['carShareEnabled'] ?? false;
           _walletBalance = (data['walletBalance'] ?? 0).toDouble();
           _tripsToday = data['tripsToday'] ?? 0;
           _earningsToday = (data['earningsToday'] ?? 0).toDouble();
@@ -1219,99 +1225,336 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
   }
 
 
-  Future<void> _toggleOnline() async {
+  /// The three-way Cab / Offline / Car Share selector is derived, never
+  /// stored — `_isOnline` IS cabAvailability and `_carShareEnabled` IS
+  /// carShareAvailability. Deriving the mode from those two flags (instead
+  /// of keeping a third `driverMode` field) makes the mutual-exclusion rule
+  /// structural: there is no third variable that could ever drift out of
+  /// sync with the two that actually gate dispatch.
+  DriverServiceMode get _driverMode {
+    if (_isOnline) return DriverServiceMode.cab;
+    if (_carShareEnabled) return DriverServiceMode.carShare;
+    return DriverServiceMode.offline;
+  }
+
+  List<Color> _modeColors(DriverServiceMode mode) {
+    switch (mode) {
+      case DriverServiceMode.cab:
+        return const [Color(0xFF2D8CFF), Color(0xFF1A6FDB)];
+      case DriverServiceMode.offline:
+        return const [Color(0xFF64748B), Color(0xFF475569)];
+      case DriverServiceMode.carShare:
+        return const [Color(0xFF10B981), Color(0xFF059669)];
+    }
+  }
+
+  /// Switches between Cab / Offline / Car Share. The two backend flags are
+  /// updated sequentially — whichever service is currently active is turned
+  /// off (and confirmed by the server) before the target service is turned
+  /// on — so the backend can never briefly represent both Cab and Car Share
+  /// as active at once. If the "turn on" half fails after the "turn off"
+  /// half already succeeded, we do not pretend to revert to the old mode
+  /// (the backend no longer agrees with that); instead we land the driver
+  /// safely Offline and say so, since that's the only state guaranteed to
+  /// match what the server actually has.
+  Future<void> _switchDriverMode(DriverServiceMode target) async {
+    if (_modeSwitching || target == _driverMode) return;
     HapticFeedback.mediumImpact();
-    final newStatus = !_isOnline;
-    if (newStatus && !_isDriverVehicleActive) {
+
+    if (target == DriverServiceMode.cab && !_isDriverVehicleActive) {
       _showSnack('Your service is temporarily unavailable by admin', error: true);
       return;
     }
 
-    // 1. INSTANT OPTIMISTIC UI UPDATE
-    setState(() {
-      _isOnline = newStatus;
-      _toggling = false; // No buffering
-    });
-
-    if (newStatus) {
-      _startLocationStreaming();
-      _startHeatmapRefresh();
-      _startIdleTimer();
-      OnlineKeepAliveService.start();
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) OnlineKeepAliveService.maybePromptForBatteryExemption(context);
-      });
-    } else {
-      _stopLocationStreaming();
-      _stopHeatmap();
-      OnlineKeepAliveService.stop();
+    if (_carShareEnabled && target != DriverServiceMode.carShare) {
+      final confirmed = await _confirmLeaveActiveCarShareSession();
+      if (!confirmed) return;
     }
 
-    // 2. BACKGROUND PROCESSING - confirm with the server; roll back the
-    // optimistic UI if the server never actually registered the change, so
-    // the driver is never shown "online" while the backend still has them
-    // offline (or vice versa).
-    Future.microtask(() async {
-      try {
-        if (newStatus) {
-          await _getLocation();
-        }
+    final prevOnline = _isOnline;
+    final prevCarShare = _carShareEnabled;
+    setState(() => _modeSwitching = true);
 
-        final headers = await AuthService.getHeaders();
+    bool turnedOffPrevious = false;
+    try {
+      final headers = await AuthService.getHeaders();
+      final jsonHeaders = {...headers, 'Content-Type': 'application/json'};
+
+      // 1. Turn off whichever service is currently active but isn't the target.
+      if (prevCarShare && target != DriverServiceMode.carShare) {
+        await http.post(Uri.parse(ApiConfig.localPoolSessionEnd), headers: headers)
+            .timeout(const Duration(seconds: 10));
+        final res = await http.patch(
+          Uri.parse(ApiConfig.updateProfile),
+          headers: jsonHeaders,
+          body: jsonEncode({'carShareEnabled': false}),
+        ).timeout(const Duration(seconds: 8));
+        if (res.statusCode != 200) throw Exception('Could not turn off Car Share');
+        turnedOffPrevious = true;
+      }
+      if (prevOnline && target != DriverServiceMode.cab) {
         final res = await http.patch(
           Uri.parse(ApiConfig.driverOnlineStatus),
-          headers: headers,
-          body: jsonEncode({
-            'isOnline': newStatus,
-            'lat': _center.latitude,
-            'lng': _center.longitude,
-          }),
-        ).timeout(const Duration(seconds: 4)); // Fast fail timeout
-
-        if (res.statusCode == 401) {
-          _handleSessionExpired();
-          return;
-        }
-
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-          _revertOnlineToggle(newStatus, 'Could not update status. Please try again.');
-          return;
-        }
-
-        // Only tell the socket layer / driver once the server has confirmed
-        // the change - avoids other clients (dispatch, admin) seeing an
-        // "online" broadcast the backend never actually accepted.
-        _socket.setOnlineStatus(
-          isOnline: newStatus,
-          lat: _center.latitude,
-          lng: _center.longitude,
-        );
-        _showSnack(newStatus ? 'You are online' : 'You are offline');
-      } catch (e) {
-        _revertOnlineToggle(newStatus, 'Network error. Could not update status.');
+          headers: jsonHeaders,
+          body: jsonEncode({'isOnline': false, 'lat': _center.latitude, 'lng': _center.longitude}),
+        ).timeout(const Duration(seconds: 8));
+        if (res.statusCode != 200) throw Exception('Could not turn off Cab Service');
+        turnedOffPrevious = true;
+        _stopLocationStreaming();
+        _stopHeatmap();
+        OnlineKeepAliveService.stop();
+        _socket.setOnlineStatus(isOnline: false, lat: _center.latitude, lng: _center.longitude);
       }
-    });
-  }
 
-  /// Rolls the optimistic online/offline UI state back to what it was before
-  /// a toggle attempt, since the server never confirmed the change.
-  void _revertOnlineToggle(bool attemptedStatus, String message) {
-    if (!mounted) return;
-    final revertedStatus = !attemptedStatus;
-    setState(() => _isOnline = revertedStatus);
-    if (revertedStatus) {
-      _startLocationStreaming();
-      _startHeatmapRefresh();
-      _startIdleTimer();
-      OnlineKeepAliveService.start();
-    } else {
-      _stopLocationStreaming();
-      _stopHeatmap();
-      OnlineKeepAliveService.stop();
+      // 2. Turn on the target service.
+      if (target == DriverServiceMode.cab) {
+        if (!_hasValidLocationFix) await _getLocation();
+        final res = await http.patch(
+          Uri.parse(ApiConfig.driverOnlineStatus),
+          headers: jsonHeaders,
+          body: jsonEncode({'isOnline': true, 'lat': _center.latitude, 'lng': _center.longitude}),
+        ).timeout(const Duration(seconds: 8));
+        if (res.statusCode == 401) { _handleSessionExpired(); return; }
+        if (res.statusCode != 200) throw Exception('Could not activate Cab Service');
+      } else if (target == DriverServiceMode.carShare) {
+        final res = await http.patch(
+          Uri.parse(ApiConfig.updateProfile),
+          headers: jsonHeaders,
+          body: jsonEncode({'carShareEnabled': true}),
+        ).timeout(const Duration(seconds: 8));
+        if (res.statusCode == 401) { _handleSessionExpired(); return; }
+        if (res.statusCode != 200) throw Exception('Could not activate Car Share');
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _isOnline = target == DriverServiceMode.cab;
+        _carShareEnabled = target == DriverServiceMode.carShare;
+        _modeSwitching = false;
+      });
+
+      if (target == DriverServiceMode.cab) {
+        _startLocationStreaming();
+        _startHeatmapRefresh();
+        _startIdleTimer();
+        OnlineKeepAliveService.start();
+        _socket.setOnlineStatus(isOnline: true, lat: _center.latitude, lng: _center.longitude);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) OnlineKeepAliveService.maybePromptForBatteryExemption(context);
+        });
+      }
+
+      _showSnack(switch (target) {
+        DriverServiceMode.cab => 'Cab Service activated — you can now receive ride requests',
+        DriverServiceMode.offline => 'You are offline',
+        DriverServiceMode.carShare => 'Car Share activated',
+      });
+
+      if (target == DriverServiceMode.carShare) {
+        await Navigator.push(context, MaterialPageRoute(builder: (_) => const LocalPoolScreen()));
+        _refreshCarShareState();
+      }
+    } catch (_) {
+      if (!mounted) return;
+      if (turnedOffPrevious) {
+        // The previous service is already confirmed off on the backend —
+        // claiming a revert here would lie about server state. Land Offline.
+        setState(() {
+          _isOnline = false;
+          _carShareEnabled = false;
+          _modeSwitching = false;
+        });
+        _showSnack(
+          'Switched off, but could not activate the new mode. You are now offline — please try again.',
+          error: true,
+        );
+      } else {
+        setState(() {
+          _isOnline = prevOnline;
+          _carShareEnabled = prevCarShare;
+          _modeSwitching = false;
+        });
+        _showSnack('Could not switch mode. Please check your connection and try again.', error: true);
+      }
     }
-    _showSnack(message, error: true);
   }
 
+  /// Ending an active Car Share session mid-ride cancels any in-progress
+  /// passenger pickups, so confirm before switching away from Car Share
+  /// while a session is actually running.
+  Future<bool> _confirmLeaveActiveCarShareSession() async {
+    try {
+      final headers = await AuthService.getHeaders();
+      final res = await http.get(Uri.parse(ApiConfig.localPoolSessionActive), headers: headers)
+          .timeout(const Duration(seconds: 8));
+      if (res.statusCode != 200) return true;
+      final body = jsonDecode(res.body);
+      final data = (body is Map && body['data'] is Map) ? body['data'] as Map : body as Map;
+      if (data['session'] == null) return true;
+    } catch (_) {
+      return true;
+    }
+    if (!mounted) return false;
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        backgroundColor: JT.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text('End Car Share session?', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 17)),
+        content: Text(
+          'You have an active Car Share session running. Switching modes now will end that session and cancel any in-progress passenger pickups.',
+          style: GoogleFonts.poppins(fontSize: 13.5, color: JT.textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text('Cancel', style: GoogleFonts.poppins(color: JT.textSecondary)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: JT.error,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            child: const Text('End Session'),
+          ),
+        ],
+      ),
+    );
+    return result == true;
+  }
+
+  /// Re-syncs the "Available for Car Share?" flag after the driver returns
+  /// from LocalPoolScreen, where the same flag can also be flipped directly
+  /// — keeps this selector and that screen reading one shared piece of state.
+  Future<void> _refreshCarShareState() async {
+    try {
+      final headers = await AuthService.getHeaders();
+      final res = await http.get(Uri.parse(ApiConfig.driverProfile), headers: headers)
+          .timeout(const Duration(seconds: 8));
+      if (res.statusCode == 200 && mounted) {
+        final body = jsonDecode(res.body);
+        final user = (body is Map && body['user'] is Map) ? body['user'] as Map : body as Map;
+        setState(() => _carShareEnabled = user['carShareEnabled'] == true);
+      }
+    } catch (_) {}
+  }
+
+  /// The premium three-way Cab / Offline / Car Share selector — the single
+  /// on-screen control for `_driverMode`. A sliding gradient pill highlights
+  /// whichever third of the track is active; tapping either of the other two
+  /// thirds calls `_switchDriverMode`.
+  Widget _buildModeSelector() {
+    final mode = _driverMode;
+    final alignment = switch (mode) {
+      DriverServiceMode.cab => Alignment.centerLeft,
+      DriverServiceMode.offline => Alignment.center,
+      DriverServiceMode.carShare => Alignment.centerRight,
+    };
+    return Container(
+      height: 86,
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF3F7FF),
+        borderRadius: BorderRadius.circular(26),
+        border: Border.all(color: const Color(0xFFE5E9F0)),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 18, offset: const Offset(0, 8)),
+        ],
+      ),
+      child: Stack(
+        children: [
+          AnimatedAlign(
+            duration: const Duration(milliseconds: 320),
+            curve: Curves.easeOutCubic,
+            alignment: alignment,
+            child: FractionallySizedBox(
+              widthFactor: 1 / 3,
+              heightFactor: 1,
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: _modeColors(mode),
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [
+                    BoxShadow(color: _modeColors(mode).first.withValues(alpha: 0.35), blurRadius: 14, offset: const Offset(0, 6)),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          Row(
+            children: [
+              Expanded(child: _modeSegment(DriverServiceMode.cab, Icons.local_taxi_rounded, 'CAB SERVICE')),
+              Expanded(child: _modeSegment(DriverServiceMode.offline, Icons.power_settings_new_rounded, 'OFFLINE')),
+              Expanded(child: _modeSegment(DriverServiceMode.carShare, Icons.directions_car_filled_rounded, 'CAR SHARE')),
+            ],
+          ),
+          if (_modeSwitching)
+            Positioned.fill(
+              child: Center(
+                child: Container(
+                  width: 28,
+                  height: 28,
+                  padding: const EdgeInsets.all(5),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                    boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.18), blurRadius: 8)],
+                  ),
+                  child: CircularProgressIndicator(strokeWidth: 2.4, color: _modeColors(mode).first),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _modeSegment(DriverServiceMode segMode, IconData icon, String label) {
+    final selected = _driverMode == segMode;
+    final isOffline = segMode == DriverServiceMode.offline;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _modeSwitching ? null : () => _switchDriverMode(segMode),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          AnimatedScale(
+            duration: const Duration(milliseconds: 250),
+            scale: selected ? 1.08 : 1.0,
+            child: Icon(
+              icon,
+              size: isOffline ? (selected ? 27 : 24) : (selected ? 23 : 20),
+              color: selected ? Colors.white : const Color(0xFF94A3B8),
+            ),
+          ),
+          const SizedBox(height: 5),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: AnimatedDefaultTextStyle(
+                duration: const Duration(milliseconds: 250),
+                style: GoogleFonts.poppins(
+                  color: selected ? Colors.white : const Color(0xFF64748B),
+                  fontSize: 11.5,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
+                  letterSpacing: 0.3,
+                ),
+                child: Text(label, textAlign: TextAlign.center, maxLines: 1),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1687,86 +1930,34 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
                       letterSpacing: -0.5,
                     ),
                   ),
-                  Text(
-                    '(Active Profile)',
-                    style: GoogleFonts.poppins(
-                      color: const Color(0xFF64748B),
-                      fontSize: 14,
-                      fontWeight: FontWeight.w400,
-                    ),
+                  Row(
+                    children: [
+                      Container(
+                        width: 7,
+                        height: 7,
+                        decoration: BoxDecoration(color: _modeColors(_driverMode).first, shape: BoxShape.circle),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        switch (_driverMode) {
+                          DriverServiceMode.cab => 'Cab Service Active',
+                          DriverServiceMode.carShare => 'Car Share Active',
+                          DriverServiceMode.offline => 'You are Offline',
+                        },
+                        style: GoogleFonts.poppins(
+                          color: const Color(0xFF64748B),
+                          fontSize: 14,
+                          fontWeight: FontWeight.w400,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
-              GestureDetector(
-                onTap: _toggling ? null : _toggleOnline,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 300),
-                  width: 90,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: _isOnline ? const Color(0xFF10B981) : const Color(0xFFEF4444),
-                    borderRadius: BorderRadius.circular(30),
-                    boxShadow: [
-                      BoxShadow(
-                        color: (_isOnline ? const Color(0xFF10B981) : const Color(0xFFEF4444)).withValues(alpha: 0.3),
-                        blurRadius: 8,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: Stack(
-                    children: [
-                      AnimatedAlign(
-                        duration: const Duration(milliseconds: 300),
-                        curve: Curves.easeInOut,
-                        alignment: _isOnline ? Alignment.centerLeft : Alignment.centerRight,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 14),
-                          child: Text(
-                            _isOnline ? 'ON' : 'OFF',
-                            style: GoogleFonts.poppins(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w700,
-                              fontSize: 15,
-                              letterSpacing: 0.5,
-                            ),
-                          ),
-                        ),
-                      ),
-                      AnimatedAlign(
-                        duration: const Duration(milliseconds: 300),
-                        curve: Curves.easeInOut,
-                        alignment: _isOnline ? Alignment.centerRight : Alignment.centerLeft,
-                        child: Padding(
-                          padding: const EdgeInsets.all(4.0),
-                          child: Container(
-                            width: 36, 
-                            height: 36,
-                            decoration: const BoxDecoration(
-                              color: Colors.white,
-                              shape: BoxShape.circle,
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black12,
-                                  blurRadius: 4,
-                                  offset: Offset(0, 2),
-                                ),
-                              ],
-                            ),
-                            child: Icon(
-                              Icons.power_settings_new_rounded,
-                              color: _isOnline ? const Color(0xFF10B981) : const Color(0xFFEF4444),
-                              size: 20,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
             ],
           ),
+          const SizedBox(height: 18),
+          _buildModeSelector(),
           const SizedBox(height: 24),
           Row(
             children: [
