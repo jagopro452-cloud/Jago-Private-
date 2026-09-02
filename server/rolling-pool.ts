@@ -440,7 +440,7 @@ async function findBestSession(
   // "sessions exist but none are close enough / right category."
   const allActiveR = await rawDb.execute(rawSql`
     SELECT dps.id, dps.driver_id, dps.status, dps.accepting_new_requests, dps.available_seats,
-           dps.current_lat, dps.current_lng, dps.vehicle_category_id, dps.created_at
+           dps.current_lat, dps.current_lng, dps.last_location_at, dps.vehicle_category_id, dps.created_at
     FROM driver_pool_sessions dps
     WHERE dps.status = 'active'
   `).catch(() => ({ rows: [] as any[] }));
@@ -448,15 +448,29 @@ async function findBestSession(
     totalActiveSessions: allActiveR.rows.length,
     seatsNeeded,
     requestedVehicleCategoryId: vehicleCategoryId || null,
-    sessions: (allActiveR.rows as any[]).map((s) => ({
-      sessionId: s.id,
-      driverId: s.driver_id,
-      acceptingNewRequests: s.accepting_new_requests,
-      availableSeats: s.available_seats,
-      hasLocation: s.current_lat != null && s.current_lng != null,
-      vehicleCategoryId: s.vehicle_category_id,
-      sessionAgeSec: Math.round((Date.now() - new Date(s.created_at).getTime()) / 1000),
-    })),
+    sessions: (allActiveR.rows as any[]).map((s) => {
+      const hasLocation = s.current_lat != null && s.current_lng != null;
+      // A session with hasLocation=true but a large locationAgeSec is the
+      // classic symptom of a driver who started Car Share, then left the
+      // screen whose Timer was the only thing keeping this column fresh
+      // (LocalPoolScreen) — the session looks "active" but is silently
+      // unmatchable once the driver has moved beyond the match radius from
+      // this stale point. hasLocation=false + locationAgeSec=null means the
+      // very first location sync never landed at all.
+      const locationAgeSec = s.last_location_at
+        ? Math.round((Date.now() - new Date(s.last_location_at).getTime()) / 1000)
+        : null;
+      return {
+        sessionId: s.id,
+        driverId: s.driver_id,
+        acceptingNewRequests: s.accepting_new_requests,
+        availableSeats: s.available_seats,
+        hasLocation,
+        locationAgeSec,
+        vehicleCategoryId: s.vehicle_category_id,
+        sessionAgeSec: Math.round((Date.now() - new Date(s.created_at).getTime()) / 1000),
+      };
+    }),
   }));
 
   const r = await rawDb.execute(rawSql`
@@ -469,6 +483,19 @@ async function findBestSession(
       AND dps.available_seats >= ${seatsNeeded}
       AND dps.current_lat IS NOT NULL
       AND dps.current_lng IS NOT NULL
+      -- A session's location is only ever as fresh as the driver's last GPS
+      -- ping (every ~8s while Car Share is active — see home_screen.dart's
+      -- _carShareLocationTimer). A session that stops getting pings (app
+      -- killed, driver went to Cab/Offline through some path that didn't
+      -- clean it up, or simply an old abandoned test session) keeps
+      -- current_lat/lng frozen at wherever the driver last was — with no
+      -- freshness check here it was still treated as an equally valid
+      -- candidate as a session updated 30 seconds ago, and distance-based
+      -- scoring would happily pick a day-old ghost session over a live one
+      -- sitting right next to the pickup. Cab dispatch already enforces the
+      -- equivalent (driver_locations.updated_at > NOW() - 90s) —
+      -- last_location_at mirrors that guarantee here.
+      AND dps.last_location_at > NOW() - INTERVAL '90 seconds'
       AND (
         6371 * 2 * ASIN(SQRT(
           POWER(SIN((${pickupLat} - dps.current_lat::float) * PI()/360), 2) +
@@ -964,14 +991,21 @@ export function registerRollingPoolRoutes(app: Express, authApp: any, requireAdm
       `).catch(() => ({ rows: [] as any[] }));
       const loc = locR.rows[0] as any;
 
+      // Stamp last_location_at at creation whenever we actually have a seed
+      // location, so a brand-new session is immediately eligible for
+      // matching (findBestSession requires last_location_at within the last
+      // 90s) instead of depending on the driver's first location ping
+      // landing before a nearby booking comes in.
+      const hasSeedLocation = loc?.current_lat != null && loc?.current_lng != null;
       const r = await rawDb.execute(rawSql`
         INSERT INTO driver_pool_sessions
-          (driver_id, vehicle_category_id, status, accepting_new_requests, pool_vehicle_type, max_seats, available_seats, current_lat, current_lng)
+          (driver_id, vehicle_category_id, status, accepting_new_requests, pool_vehicle_type, max_seats, available_seats, current_lat, current_lng, last_location_at)
         VALUES
           (${driver.id}::uuid,
            ${resolvedVehicleCategoryId}::uuid,
            'active', true, ${poolVehicleType}, ${seatsN}, ${seatsN},
-           ${loc?.current_lat || null}, ${loc?.current_lng || null})
+           ${loc?.current_lat || null}, ${loc?.current_lng || null},
+           ${hasSeedLocation ? rawSql`NOW()` : rawSql`NULL`})
         RETURNING *
       `);
       const session = r.rows[0] as any;

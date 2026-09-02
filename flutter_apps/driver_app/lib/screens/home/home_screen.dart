@@ -78,6 +78,18 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
   Timer? _locationTimer;
   StreamSubscription<Position>? _posStream; // live GPS stream — battery-efficient
   Position? _lastPosition; // cached position for server updates
+  // Car Share's own driver_pool_sessions.current_lat/lng was previously only
+  // ever updated by LocalPoolScreen's own Timer, which dies the instant that
+  // screen unmounts — e.g. the moment a driver returns to this Home Screen
+  // after starting a session, which the new mode selector makes the natural
+  // next action. The session's location then never moves again, so once the
+  // driver's real position drifts outside the match radius (or if the first
+  // sync never even completed), the rolling-pool matcher silently stops
+  // finding them and no Car Share alert is ever delivered. This timer keeps
+  // that location flowing for as long as Car Share mode is active, regardless
+  // of which screen is on top — the same guarantee Cab mode already has via
+  // `_locationTimer`/`_posStream` above.
+  Timer? _carShareLocationTimer;
   late AnimationController _pulseCtrl;
   final List<StreamSubscription> _subs = [];
   int _navIndex = 0;
@@ -451,6 +463,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     _vehicleStatusSub?.cancel();
     _locationTimer?.cancel();
     _posStream?.cancel();
+    _carShareLocationTimer?.cancel();
     _idleTimer?.cancel();
     _heatmap.stopRefresh();
     _pulseCtrl.dispose();
@@ -484,6 +497,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     } else if (state == AppLifecycleState.resumed) {
       // Came back to foreground — refresh GPS fix and resume live updates if needed
       _refreshLocationAfterResume();
+    }
+    // Belt-and-suspenders: _carShareLocationTimer isn't cancelled on pause
+    // (it relies on the same foreground-service keep-alive as Cab mode to
+    // keep ticking in the background), but on the rare chance the OS killed
+    // it anyway, resuming restarts it — the internal null-check makes this
+    // a no-op if it's already running.
+    if (state == AppLifecycleState.resumed && _carShareEnabled) {
+      _startCarShareLocationSync();
     }
   }
 
@@ -916,6 +937,54 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     _lastPosition = null;
   }
 
+  /// Keeps `driver_pool_sessions.current_lat/lng` fresh for as long as Car
+  /// Share mode is active — independent of whether LocalPoolScreen happens
+  /// to be the visible route. See the `_carShareLocationTimer` field comment
+  /// for why this exists. Posts to the same endpoint LocalPoolScreen's own
+  /// (screen-lifetime-only) sync already uses, so this is purely additive —
+  /// nothing on the backend needed to change.
+  void _startCarShareLocationSync() {
+    if (_carShareLocationTimer != null) return;
+    debugPrint('[CAR_SHARE_LOCATION_SYNC] starting home-level location sync');
+    _syncCarShareLocation();
+    _carShareLocationTimer = Timer.periodic(const Duration(seconds: 8), (_) => _syncCarShareLocation());
+  }
+
+  void _stopCarShareLocationSync() {
+    if (_carShareLocationTimer == null) return;
+    debugPrint('[CAR_SHARE_LOCATION_SYNC] stopping home-level location sync');
+    _carShareLocationTimer?.cancel();
+    _carShareLocationTimer = null;
+  }
+
+  Future<void> _syncCarShareLocation() async {
+    if (!_carShareEnabled) {
+      _stopCarShareLocationSync();
+      return;
+    }
+    try {
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+      ).timeout(const Duration(seconds: 6));
+      final headers = await AuthService.getHeaders();
+      final res = await http.patch(
+        Uri.parse(ApiConfig.localPoolLocation),
+        headers: {...headers, 'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'lat': pos.latitude,
+          'lng': pos.longitude,
+          'bearingDeg': pos.heading.isFinite ? pos.heading : null,
+        }),
+      ).timeout(const Duration(seconds: 6));
+      debugPrint('[CAR_SHARE_LOCATION_SYNC] posted lat=${pos.latitude} lng=${pos.longitude} status=${res.statusCode}');
+    } catch (e) {
+      // Keep this silent for the driver (matches LocalPoolScreen's own
+      // sync) but log it — a permission/GPS failure here is exactly the
+      // kind of thing that otherwise silently explains "no alerts ever".
+      debugPrint('[CAR_SHARE_LOCATION_SYNC] sync failed: $e');
+    }
+  }
+
   // ── Heatmap methods ────────────────────────────────────────────────────
 
   void _startHeatmapRefresh() {
@@ -1291,6 +1360,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         ).timeout(const Duration(seconds: 8));
         if (res.statusCode != 200) throw Exception('Could not turn off Car Share');
         turnedOffPrevious = true;
+        _stopCarShareLocationSync();
+        OnlineKeepAliveService.stop();
       }
       if (prevOnline && target != DriverServiceMode.cab) {
         final res = await http.patch(
@@ -1317,6 +1388,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         if (res.statusCode == 401) { _handleSessionExpired(); return; }
         if (res.statusCode != 200) throw Exception('Could not activate Cab Service');
       } else if (target == DriverServiceMode.carShare) {
+        // Car Share matching hard-requires a non-null driver_pool_sessions
+        // location (see rolling-pool.ts findBestSession) — a driver who
+        // never activated Cab mode this session may never have been
+        // prompted for location permission/a GPS fix at all, so request one
+        // here too rather than assuming it already exists.
+        if (!_hasValidLocationFix) await _getLocation();
         final res = await http.patch(
           Uri.parse(ApiConfig.updateProfile),
           headers: jsonHeaders,
@@ -1324,6 +1401,43 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         ).timeout(const Duration(seconds: 8));
         if (res.statusCode == 401) { _handleSessionExpired(); return; }
         if (res.statusCode != 200) throw Exception('Could not activate Car Share');
+        // From here on the backend already has carShareEnabled=true — any
+        // failure below must land Offline (and roll this flag back) rather
+        // than silently reverting the local UI while the backend disagrees.
+        turnedOffPrevious = true;
+
+        // Setting the eligibility flag alone does not make this driver
+        // matchable — findBestSession() in rolling-pool.ts only ever looks
+        // at driver_pool_sessions rows with status='active'. Previously this
+        // selector stopped here and just navigated into LocalPoolScreen,
+        // trusting the driver to notice they still had to pick a seat count
+        // and press "Start Local Pool" there. In practice nobody did (it
+        // isn't obvious a second step is required), so the driver showed as
+        // "Car Share Active" on Home while having zero active session and
+        // never matching anything. Starting the session here makes Car Share
+        // genuinely one-tap, the same as Cab and Offline. 4 is a safe
+        // default — the backend caps it to the driver's real vehicle
+        // capacity regardless (driver_pool_sessions.start, seatsN clamp).
+        final sessionRes = await http.post(
+          Uri.parse(ApiConfig.localPoolSessionStart),
+          headers: jsonHeaders,
+          body: jsonEncode({'maxSeats': 4}),
+        ).timeout(const Duration(seconds: 10));
+        if (sessionRes.statusCode != 200) {
+          String msg = 'Could not start Car Share session';
+          try {
+            final decoded = jsonDecode(sessionRes.body);
+            msg = decoded['message']?.toString() ?? msg;
+          } catch (_) {}
+          // Best-effort rollback so the backend doesn't end up with
+          // carShareEnabled=true while the driver shows as Offline.
+          await http.patch(
+            Uri.parse(ApiConfig.updateProfile),
+            headers: jsonHeaders,
+            body: jsonEncode({'carShareEnabled': false}),
+          ).timeout(const Duration(seconds: 8)).catchError((_) => http.Response('', 500));
+          throw Exception(msg);
+        }
       }
 
       if (!mounted) return;
@@ -1342,30 +1456,40 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) OnlineKeepAliveService.maybePromptForBatteryExemption(context);
         });
+      } else if (target == DriverServiceMode.carShare) {
+        _startCarShareLocationSync();
+        OnlineKeepAliveService.start();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) OnlineKeepAliveService.maybePromptForBatteryExemption(context);
+        });
       }
 
       _showSnack(switch (target) {
         DriverServiceMode.cab => 'Cab Service activated — you can now receive ride requests',
         DriverServiceMode.offline => 'You are offline',
-        DriverServiceMode.carShare => 'Car Share activated',
+        DriverServiceMode.carShare => 'Car Share activated — you can now receive passenger requests',
       });
 
       if (target == DriverServiceMode.carShare) {
         await Navigator.push(context, MaterialPageRoute(builder: (_) => const LocalPoolScreen()));
         _refreshCarShareState();
       }
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
       if (turnedOffPrevious) {
         // The previous service is already confirmed off on the backend —
         // claiming a revert here would lie about server state. Land Offline.
+        _stopCarShareLocationSync();
         setState(() {
           _isOnline = false;
           _carShareEnabled = false;
           _modeSwitching = false;
         });
+        final detail = e.toString().replaceFirst('Exception: ', '');
         _showSnack(
-          'Switched off, but could not activate the new mode. You are now offline — please try again.',
+          detail.isNotEmpty && detail != 'null'
+              ? '$detail — you are now offline. Please try again.'
+              : 'Switched off, but could not activate the new mode. You are now offline — please try again.',
           error: true,
         );
       } else {

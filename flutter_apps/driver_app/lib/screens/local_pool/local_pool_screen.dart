@@ -99,6 +99,17 @@ class _LocalPoolScreenState extends State<LocalPoolScreen> {
   @override
   void initState() {
     super.initState();
+    // This screen can be reached via Navigator.pushReplacement from
+    // HomeScreen._recoverActiveTrip() on app restart (an active Car Share
+    // session was found) — HomeScreen.dispose() explicitly disconnects the
+    // shared SocketService singleton when that happens, and unlike
+    // TripScreen/ParcelDeliveryScreen (which reconnect defensively for the
+    // same reason), this screen never did. Result: a driver whose app
+    // restarts while Car Share is active gets a dead socket forever — every
+    // pool:new_passenger alert is emitted server-side but reaches no one.
+    // connect() is a no-op if HomeScreen is still alive underneath and
+    // already connected.
+    _socket.connect(ApiConfig.socketUrl);
     _wireSocket();
     _load();
     _loadCarShareFlag();
