@@ -365,13 +365,15 @@ const upload = multer({
   },
 });
 
+// Onboarding (driver_app RegisterScreen) only collects DL front/back, RC and
+// a selfie — insurance and vehicle_photo were dropped from the wizard, so
+// they can no longer be required here or every new driver would be
+// permanently stuck "missing documents" and unable to be approved.
 const DRIVER_REQUIRED_DOCUMENT_TYPES = [
   "dl_front",
   "dl_back",
   "rc",
-  "insurance",
   "selfie",
-  "vehicle_photo",
 ] as const;
 
 const DRIVER_DOCUMENT_LABELS: Record<string, string> = {
