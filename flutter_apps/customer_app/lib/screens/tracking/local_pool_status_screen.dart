@@ -18,12 +18,22 @@ class LocalPoolStatusScreen extends StatefulWidget {
   final String requestId;
   final String pickupAddress;
   final String dropAddress;
+  // Only needed to power "Try Again" after a search timeout — null on old
+  // call sites (none currently) just disables that one button, nothing else.
+  final double? pickupLat;
+  final double? pickupLng;
+  final double? dropLat;
+  final double? dropLng;
 
   const LocalPoolStatusScreen({
     super.key,
     required this.requestId,
     required this.pickupAddress,
     required this.dropAddress,
+    this.pickupLat,
+    this.pickupLng,
+    this.dropLat,
+    this.dropLng,
   });
 
   @override
@@ -80,6 +90,7 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
 
   bool _loading = true;
   bool _cancelling = false;
+  bool _retrying = false;
   String? _error;
   Map<String, dynamic>? _booking;
   Map<String, dynamic>? _seatState;
@@ -348,6 +359,72 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
       );
     } finally {
       if (mounted) setState(() => _cancelling = false);
+    }
+  }
+
+  // Re-books the same pickup/drop/seat count as a brand new request after a
+  // search timeout closed this one — same POST CarShareOptionsScreen makes,
+  // just re-issued here so the customer doesn't have to re-enter anything.
+  // Replaces this screen with a fresh one (requestId is a different pool
+  // booking now) rather than mutating in place.
+  Future<void> _tryAgain() async {
+    if (_retrying) return;
+    if (widget.pickupLat == null || widget.pickupLng == null || widget.dropLat == null || widget.dropLng == null) {
+      // No coordinates to rebook with (older call site) — send them back to
+      // pick pickup/drop again rather than failing silently.
+      Navigator.of(context).popUntil((route) => route.isFirst);
+      return;
+    }
+    setState(() => _retrying = true);
+    try {
+      final seats = int.tryParse('${_booking?['seats_requested'] ?? _booking?['seatsRequested'] ?? 1}') ?? 1;
+      final headers = await AuthService.getHeaders();
+      final res = await http
+          .post(
+            Uri.parse(ApiConfig.localPoolBook),
+            headers: headers,
+            body: jsonEncode({
+              'pickupLat': widget.pickupLat,
+              'pickupLng': widget.pickupLng,
+              'dropLat': widget.dropLat,
+              'dropLng': widget.dropLng,
+              'pickupAddress': widget.pickupAddress,
+              'dropAddress': widget.dropAddress,
+              'seatsRequested': seats,
+            }),
+          )
+          .timeout(const Duration(seconds: 20));
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      final newRequestId = data['data']?['requestId']?.toString();
+      if (!mounted) return;
+      if (res.statusCode == 200 && data['success'] == true && newRequestId != null) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => LocalPoolStatusScreen(
+              requestId: newRequestId,
+              pickupAddress: widget.pickupAddress,
+              dropAddress: widget.dropAddress,
+              pickupLat: widget.pickupLat,
+              pickupLng: widget.pickupLng,
+              dropLat: widget.dropLat,
+              dropLng: widget.dropLng,
+            ),
+          ),
+        );
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(data['message']?.toString() ?? 'Could not start a new search'),
+        backgroundColor: JT.error,
+      ));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Network issue while starting a new search')),
+      );
+    } finally {
+      if (mounted) setState(() => _retrying = false);
     }
   }
 
@@ -782,6 +859,31 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
                                           fontWeight: FontWeight.w600,
                                         ),
                                       ),
+                                    ),
+                                  ),
+                                if (_status == 'search_timeout')
+                                  SizedBox(
+                                    height: 56,
+                                    child: ElevatedButton(
+                                      onPressed: _retrying ? null : _tryAgain,
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: JT.primary,
+                                        foregroundColor: Colors.white,
+                                        elevation: 0,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(16),
+                                        ),
+                                      ),
+                                      child: _retrying
+                                          ? const SizedBox(
+                                              width: 22,
+                                              height: 22,
+                                              child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5),
+                                            )
+                                          : Text(
+                                              'Try Again',
+                                              style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+                                            ),
                                     ),
                                   ),
                               ],

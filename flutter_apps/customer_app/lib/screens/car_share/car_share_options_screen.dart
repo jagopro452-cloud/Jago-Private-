@@ -132,6 +132,10 @@ class _CarShareOptionsScreenState extends State<CarShareOptionsScreen> {
               requestId: requestId,
               pickupAddress: widget.pickupAddress,
               dropAddress: widget.dropAddress,
+              pickupLat: widget.pickupLat,
+              pickupLng: widget.pickupLng,
+              dropLat: widget.dropLat,
+              dropLng: widget.dropLng,
             ),
           ),
         );

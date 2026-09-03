@@ -116,6 +116,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
   int _idleSeconds = 0;
   bool _idleSuggestionShown = false;
 
+  // Belt-and-suspenders against a socket that silently never connects (or
+  // drops and doesn't come back) — confirmed in production (2026-09-03): a
+  // driver with a valid token and working HTTP calls all day long never
+  // once attempted a socket connection, with zero error anywhere, and
+  // nothing was ever watching to notice or retry. This fires periodically
+  // regardless of cause; SocketService.connect() is a no-op if already
+  // connected, so this is always safe to call.
+  Timer? _socketWatchdogTimer;
+
   // ── Eligible Services ──────────────────────────────────────────────────
   bool _mapReadyToLoad = false;
 
@@ -141,7 +150,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
       _fetchRevenueConfig();
       _watchVehicleAvailability();
       _connectSocket();
-      
+      _startSocketWatchdog();
+
       await _recoverActiveTrip();
       await _consumeQueuedAlertAction();
       await _checkPendingFcmTrip();
@@ -462,9 +472,27 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     }));
   }
 
+  void _startSocketWatchdog() {
+    _socketWatchdogTimer?.cancel();
+    _socketWatchdogTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (!mounted) return;
+      if (!_socket.isConnected) {
+        // Deliberately calls SocketService.connect() directly, NOT
+        // _connectSocket() — the latter also (re-)registers this screen's
+        // dozen-plus stream listeners on every call, which would duplicate
+        // them on every retry (each incoming trip/pool/parcel event firing
+        // its handler once per accumulated listener). connect() itself is
+        // already safe to call repeatedly: it no-ops if already connected.
+        debugPrint('[SOCKET-WATCHDOG] not connected — retrying');
+        _socket.connect(ApiConfig.socketUrl);
+      }
+    });
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _socketWatchdogTimer?.cancel();
     for (final s in _subs) s.cancel();
     _vehicleStatusSub?.cancel();
     _locationTimer?.cancel();

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:http/http.dart' as http;
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import '../config/api_config.dart';
@@ -114,7 +115,19 @@ class SocketService {
     final userId = await AuthService.getUserId();
     final token = await AuthService.getToken() ?? '';
 
-    if (userId.isEmpty) return;
+    // This used to be a silent no-op — a driver with a valid token but an
+    // empty cached userId (a storage race, a stale install, anything) would
+    // never connect a socket, ever, with zero indication anything was
+    // wrong: no server log (the connection attempt never leaves the
+    // device), no client log, no retry. Confirmed in production
+    // (2026-09-03): a driver with fresh, working HTTP auth all day long
+    // never once attempted a socket connection. Logging here at least makes
+    // this diagnosable; HomeScreen's periodic reconnect-if-needed check
+    // (see _ensureSocketConnected) is what actually recovers from it.
+    if (userId.isEmpty) {
+      debugPrint('[SOCKET] connect() aborted: no cached userId (token present: ${token.isNotEmpty})');
+      return;
+    }
 
     _socket = IO.io(
       baseUrl,
@@ -134,8 +147,17 @@ class SocketService {
     );
 
     _on('connect', (_) {
+      debugPrint('[SOCKET] connected');
       _isConnected = true;
       _connectedController.add(true);
+    });
+
+    // Previously unregistered — a rejected handshake (bad/expired token,
+    // server-side auth failure) fired socket.io's connect_error entirely
+    // silently: no log, no stream update, nothing to distinguish "never
+    // tried" from "tried and was rejected".
+    _on('connect_error', (err) {
+      debugPrint('[SOCKET] connect_error: $err');
     });
 
     // On reconnect after server restart: restore online status so driver stays visible
@@ -157,7 +179,8 @@ class SocketService {
       }
     });
 
-    _on('disconnect', (_) {
+    _on('disconnect', (reason) {
+      debugPrint('[SOCKET] disconnected: $reason');
       _isConnected = false;
       _connectedController.add(false);
     });
