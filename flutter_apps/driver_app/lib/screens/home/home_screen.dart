@@ -71,6 +71,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
   Map<String, dynamic>? _incomingParcel;
   Map<String, dynamic>? _incomingPoolOffer;
   String _vehicleCategory = '';
+  // vehicle_categories.type ("motor_bike" / "auto" / "car") — a stable
+  // machine classification, unlike _vehicleCategory (the human-editable
+  // display name, e.g. "Mini Car"/"SUV / XL", which an admin can rename at
+  // any time). Gates the Cab/Offline/Car Share selector vs a plain
+  // Online/Offline toggle — see _isCabOrCarCategory.
+  String _vehicleTypeCode = '';
   String _vehicleNumber = '';
   String _vehicleModel = '';
   bool _hasValidLocationFix = false;
@@ -749,6 +755,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
           _tripsToday = data['tripsToday'] ?? 0;
           _earningsToday = (data['earningsToday'] ?? 0).toDouble();
           _vehicleCategory = data['vehicleCategory'] ?? '';
+          _vehicleTypeCode = (data['vehicleType'] ?? '').toString();
           _vehicleNumber = data['vehicleNumber'] ?? '';
           _vehicleModel = data['vehicleModel'] ?? '';
           _driverRating = double.tryParse(data['rating']?.toString() ?? '') ?? _driverRating;
@@ -1306,6 +1313,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     return DriverServiceMode.offline;
   }
 
+  /// Car Share only exists for 4-wheeler Cab/Car categories (Mini Car,
+  /// Sedan, SUV/XL all register as vehicle_categories.type = 'car';
+  /// Bike -> 'motor_bike', Auto -> 'auto'). Bike/Auto drivers get a plain
+  /// Online/Offline toggle instead of the three-way selector.
+  bool get _isCabOrCarCategory => _vehicleTypeCode.toLowerCase() == 'car';
+
   List<Color> _modeColors(DriverServiceMode mode) {
     switch (mode) {
       case DriverServiceMode.cab:
@@ -1329,6 +1342,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
   Future<void> _switchDriverMode(DriverServiceMode target) async {
     if (_modeSwitching || target == _driverMode) return;
     HapticFeedback.mediumImpact();
+
+    // Car Share is a Cab/Car-only feature — the selector never renders this
+    // option for Bike/Auto (see _isCabOrCarCategory / _buildModeSelector),
+    // but refuse it here too so it can never be reached through any other
+    // call path.
+    if (target == DriverServiceMode.carShare && !_isCabOrCarCategory) {
+      return;
+    }
 
     if (target == DriverServiceMode.cab && !_isDriverVehicleActive) {
       _showSnack('Your service is temporarily unavailable by admin', error: true);
@@ -1465,7 +1486,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
       }
 
       _showSnack(switch (target) {
-        DriverServiceMode.cab => 'Cab Service activated — you can now receive ride requests',
+        DriverServiceMode.cab => _isCabOrCarCategory
+            ? 'Cab Service activated — you can now receive ride requests'
+            : 'You are online — you can now receive ride requests',
         DriverServiceMode.offline => 'You are offline',
         DriverServiceMode.carShare => 'Car Share activated — you can now receive passenger requests',
       });
@@ -1566,17 +1589,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     } catch (_) {}
   }
 
-  /// The premium three-way Cab / Offline / Car Share selector — the single
-  /// on-screen control for `_driverMode`. A sliding gradient pill highlights
-  /// whichever third of the track is active; tapping either of the other two
-  /// thirds calls `_switchDriverMode`.
+  /// The on-screen control for `_driverMode`. Cab/Car category drivers get
+  /// the full three-way Cab Service / Offline / Car Share selector; every
+  /// other category (Bike, Auto, ...) gets the same widget rendering only
+  /// two segments (plain Online / Offline) — one reusable component driven
+  /// by which segments are available, rather than two separate widgets.
+  /// A sliding gradient pill highlights whichever segment is active; tapping
+  /// another calls `_switchDriverMode`.
   Widget _buildModeSelector() {
     final mode = _driverMode;
-    final alignment = switch (mode) {
-      DriverServiceMode.cab => Alignment.centerLeft,
-      DriverServiceMode.offline => Alignment.center,
-      DriverServiceMode.carShare => Alignment.centerRight,
-    };
+    final segments = _isCabOrCarCategory
+        ? const [DriverServiceMode.cab, DriverServiceMode.offline, DriverServiceMode.carShare]
+        : const [DriverServiceMode.cab, DriverServiceMode.offline];
+    final index = segments.indexOf(mode).clamp(0, segments.length - 1);
+    final widthFactor = 1 / segments.length;
+    final alignment = segments.length == 1
+        ? Alignment.center
+        : Alignment(-1 + (2 * index / (segments.length - 1)), 0);
     return Container(
       height: 86,
       padding: const EdgeInsets.all(6),
@@ -1595,7 +1624,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
             curve: Curves.easeOutCubic,
             alignment: alignment,
             child: FractionallySizedBox(
-              widthFactor: 1 / 3,
+              widthFactor: widthFactor,
               heightFactor: 1,
               child: Container(
                 decoration: BoxDecoration(
@@ -1613,11 +1642,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
             ),
           ),
           Row(
-            children: [
-              Expanded(child: _modeSegment(DriverServiceMode.cab, Icons.local_taxi_rounded, 'CAB SERVICE')),
-              Expanded(child: _modeSegment(DriverServiceMode.offline, Icons.power_settings_new_rounded, 'OFFLINE')),
-              Expanded(child: _modeSegment(DriverServiceMode.carShare, Icons.directions_car_filled_rounded, 'CAR SHARE')),
-            ],
+            children: segments
+                .map((segMode) => Expanded(
+                      child: _modeSegment(segMode, _segmentIcon(segMode), _segmentLabel(segMode)),
+                    ))
+                .toList(),
           ),
           if (_modeSwitching)
             Positioned.fill(
@@ -1638,6 +1667,28 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         ],
       ),
     );
+  }
+
+  IconData _segmentIcon(DriverServiceMode segMode) {
+    switch (segMode) {
+      case DriverServiceMode.cab:
+        return _isCabOrCarCategory ? Icons.local_taxi_rounded : Icons.online_prediction_rounded;
+      case DriverServiceMode.offline:
+        return Icons.power_settings_new_rounded;
+      case DriverServiceMode.carShare:
+        return Icons.directions_car_filled_rounded;
+    }
+  }
+
+  String _segmentLabel(DriverServiceMode segMode) {
+    switch (segMode) {
+      case DriverServiceMode.cab:
+        return _isCabOrCarCategory ? 'CAB SERVICE' : 'ONLINE';
+      case DriverServiceMode.offline:
+        return 'OFFLINE';
+      case DriverServiceMode.carShare:
+        return 'CAR SHARE';
+    }
   }
 
   Widget _modeSegment(DriverServiceMode segMode, IconData icon, String label) {
@@ -2064,7 +2115,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
                       const SizedBox(width: 6),
                       Text(
                         switch (_driverMode) {
-                          DriverServiceMode.cab => 'Cab Service Active',
+                          DriverServiceMode.cab => _isCabOrCarCategory ? 'Cab Service Active' : 'You are Online',
                           DriverServiceMode.carShare => 'Car Share Active',
                           DriverServiceMode.offline => 'You are Offline',
                         },
