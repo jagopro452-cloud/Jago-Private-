@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../core/map_night_style.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -103,6 +104,32 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
   String _status = 'searching';
   LatLng? _driverLatLng;
   Set<Marker> _liveMapMarkers = {};
+  GoogleMapController? _mapController;
+
+  // The REST status load (ApiConfig.localPoolStatus, used by _load) returns
+  // driver_name/driver_phone/vehicle_number/vehicle_model/avg_rating as flat
+  // top-level fields on the booking row — there is no nested booking['driver']
+  // map from that endpoint. Only the pool:status_update *socket* event (see
+  // _wireSocket) ever sends a nested 'driver' object. Without this fallback,
+  // reopening the app mid-ride (a cold _load() with no socket event yet)
+  // would show no driver card at all despite a driver being genuinely
+  // matched. Same defensive nested-or-flat pattern _matchedVehicleLabel()
+  // already uses.
+  Map<String, dynamic>? _resolveDriver() {
+    final nested = _booking?['driver'];
+    if (nested is Map<String, dynamic>) return nested;
+    final name = _booking?['driver_name']?.toString();
+    if (name == null || name.isEmpty) return null;
+    return {
+      'name': name,
+      'phone': _booking?['driver_phone']?.toString(),
+      'vehicleNumber': _booking?['vehicle_number']?.toString(),
+      'vehicleModel': _booking?['vehicle_model']?.toString(),
+      'vehicleCategoryType': _booking?['vehicle_category_type']?.toString(),
+      'vehicleCategoryName': _booking?['vehicle_category_name']?.toString(),
+      'rating': _booking?['avg_rating'],
+    };
+  }
 
   // The matched vehicle isn't known until a driver is assigned — before
   // that there's nothing meaningful to show, so JagoMapMarkers falls back
@@ -518,6 +545,67 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
     );
   }
 
+  // Driver assigned and the ride hasn't ended yet — the scope of the
+  // redesigned live-tracking header/sheet. 'searching' has its own hero,
+  // 'cancelled'/'search_timeout' their own closed-state card, and 'dropped'
+  // keeps the pre-existing layout below (out of scope for this redesign).
+  bool get _isLiveTrackingState =>
+      _status == 'pending_driver_accept' || _status == 'matched' || _status == 'picked_up';
+
+  // Compact two-line header for the live-tracking states — back button +
+  // title on one row, a status dot/label on the row below, refresh on the
+  // right. Replaces the plain back-only TrackingHeaderBar only while a
+  // driver is actually assigned; every other state keeps that original bar.
+  Widget _buildActiveHeader() {
+    final confirming = _status == 'pending_driver_accept';
+    return SafeArea(
+      bottom: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 20, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.arrow_back_ios_new_rounded, color: JT.textPrimary),
+                  onPressed: () => Navigator.pop(context),
+                ),
+                Text('Local Pool', style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w700, color: JT.textPrimary)),
+                const Spacer(),
+                IconButton(
+                  icon: const Icon(Icons.refresh_rounded, color: JT.primary),
+                  onPressed: () => _load(silent: true),
+                ),
+              ],
+            ),
+            Padding(
+              padding: const EdgeInsets.only(left: 48),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: confirming ? JT.warning : JT.success,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    confirming ? 'Confirming driver' : 'Ride active',
+                    style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w600, color: JT.textSecondary),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   String get _statusTitle {
     switch (_status) {
       case 'pending_driver_accept':
@@ -563,11 +651,69 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
     return '${km.toStringAsFixed(1)} km away';
   }
 
+  String _formatDistanceCompact(double km) {
+    if (km < 1) return '${(km * 1000).round()} m';
+    return '${km.toStringAsFixed(1)} km';
+  }
+
+  // Live distance to whatever the driver is currently heading toward:
+  // pickup while not yet boarded, drop once onboard. Same coordinates/
+  // JT.calculateDistance call _buildHeadingToYouPanel/_buildOnboardPanel
+  // already use — just centralized so the header map bubble, status card,
+  // and distance/ETA row all read one consistent number.
+  double? _liveDistanceKm() {
+    if (_driverLatLng == null) return null;
+    final headingToDrop = _status == 'picked_up';
+    final b = _booking;
+    dynamic latRaw;
+    dynamic lngRaw;
+    if (headingToDrop) {
+      latRaw = b?['drop_lat'];
+      lngRaw = b?['drop_lng'];
+    } else {
+      latRaw = b?['pickup_lat'];
+      lngRaw = b?['pickup_lng'];
+    }
+    final lat = double.tryParse('$latRaw');
+    final lng = double.tryParse('$lngRaw');
+    if (lat == null || lng == null) return null;
+    return JT.calculateDistance(_driverLatLng!.latitude, _driverLatLng!.longitude, lat, lng);
+  }
+
+  // Simple constant-speed estimate (~25 km/h city average) — this screen has
+  // no turn-by-turn routing/Directions integration, so this mirrors the same
+  // lightweight approximation used on the driver app's equivalent screen
+  // rather than calling a new routing endpoint.
+  int? _liveEtaMinutes(double? distKm) {
+    if (distKm == null) return null;
+    return (distKm / 25 * 60).ceil().clamp(1, 999);
+  }
+
+  // Refines "matched"/"picked_up" into the finer-grained phrasing the
+  // reference design wants (on the way / arriving / arrived) purely from
+  // live distance — there is no backend 'arrived' status for local pool
+  // (unlike the regular ride flow), so this is a client-side label only;
+  // boarding/OTP verification and status transitions are unaffected.
+  (IconData, String, String) _livePhase(double? distKm) {
+    if (_status == 'pending_driver_accept') {
+      return (Icons.hourglass_top_rounded, 'Confirming your driver', 'Waiting for the driver to accept your ride.');
+    }
+    if (_status == 'picked_up') {
+      return (Icons.directions_car_filled_rounded, 'Trip in progress', 'On the way to your drop location.');
+    }
+    // matched
+    if (distKm != null && distKm <= 0.15) {
+      return (Icons.directions_car_filled_rounded, 'Driver has arrived', 'Meet your driver at the pickup point.');
+    }
+    if (distKm != null && distKm <= 1) {
+      return (Icons.near_me_rounded, 'Driver is arriving', 'Almost there — get ready at your pickup point.');
+    }
+    return (Icons.directions_car_filled_rounded, 'Driver is on the way', 'Arriving at your pickup location soon.');
+  }
+
   @override
   Widget build(BuildContext context) {
-    final driver = _booking?['driver'] is Map<String, dynamic>
-        ? _booking!['driver'] as Map<String, dynamic>
-        : null;
+    final driver = _resolveDriver();
     final fare = double.tryParse('${_booking?['total_fare'] ?? _booking?['totalFare'] ?? 0}') ?? 0;
     final seats = _seatsRequested;
     final otp = _booking?['boarding_otp']?.toString() ?? _booking?['boardingOtp']?.toString() ?? '----';
@@ -581,12 +727,14 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
       backgroundColor: const Color(0xFFF0F7FF),
       body: Column(
         children: [
-          TrackingHeaderBar(
-            leading: IconButton(
-              icon: const Icon(Icons.arrow_back_ios_new_rounded, color: JT.textPrimary),
-              onPressed: () => Navigator.pop(context),
-            ),
-          ),
+          _isLiveTrackingState
+              ? _buildActiveHeader()
+              : TrackingHeaderBar(
+                  leading: IconButton(
+                    icon: const Icon(Icons.arrow_back_ios_new_rounded, color: JT.textPrimary),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ),
           Expanded(
             child: _loading
                 ? _buildLoadingState()
@@ -689,6 +837,402 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
   }
 
   Widget _buildSheetBody(Map<String, dynamic>? driver, int seats, double fare, String otp) {
+    if (_isLiveTrackingState) {
+      return _buildLiveTrackingSheetBody(driver, seats, fare, otp);
+    }
+    return _buildLegacySheetBody(driver, seats, fare, otp);
+  }
+
+  // ── Live-tracking sheet (pending_driver_accept / matched / picked_up) ────
+
+  Widget _buildLiveTrackingSheetBody(Map<String, dynamic>? driver, int seats, double fare, String otp) {
+    final distKm = _liveDistanceKm();
+    final etaMin = _liveEtaMinutes(distKm);
+    final (icon, title, subtitle) = _livePhase(distKm);
+    // Same gate the previous design used (TripStatusHeader's showOtp): the
+    // PIN only matters while the customer still has to board.
+    final showOtp = _status == 'matched';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        driver != null
+            ? _buildDriverCardRow(driver, seats, fare)
+            : Text('Finding your driver...', style: GoogleFonts.poppins(fontSize: 13, color: JT.textSecondary)),
+        const SizedBox(height: 14),
+        _buildLiveStatusCard(icon, title, subtitle, distKm, etaMin),
+        if (_driverSafetyLabel != null) ...[
+          const SizedBox(height: 8),
+          Align(alignment: Alignment.centerLeft, child: _safetyBadge(_driverSafetyLabel!)),
+        ],
+        const SizedBox(height: 14),
+        showOtp
+            ? Row(
+                children: [
+                  Expanded(child: _pinBox(otp)),
+                  const SizedBox(width: 12),
+                  Expanded(child: _sosBox()),
+                ],
+              )
+            : SizedBox(width: double.infinity, child: _sosBox()),
+        if (_error != null) ...[
+          const SizedBox(height: 12),
+          _errorCard(),
+        ],
+        const SizedBox(height: 14),
+        Center(child: _buildSafeRideFooter()),
+      ],
+    );
+  }
+
+  Widget _buildDriverCardRow(Map<String, dynamic> driver, int seats, double fare) {
+    final name = driver['name']?.toString() ?? 'Driver';
+    final photo = driver['photo']?.toString();
+    final rating = driver['rating'];
+    final trips = driver['totalTrips'] ?? driver['total_trips'];
+    final vehicleModel = driver['vehicleModel']?.toString() ?? '';
+    final vehicleNum = driver['vehicleNumber']?.toString() ?? '';
+    final vehicleLine = [vehicleModel, vehicleNum].where((s) => s.isNotEmpty).join(' • ');
+    return Row(
+      children: [
+        Container(
+          width: 52,
+          height: 52,
+          decoration: BoxDecoration(
+            color: JT.border,
+            shape: BoxShape.circle,
+            image: (photo != null && photo.isNotEmpty) ? DecorationImage(image: NetworkImage(photo), fit: BoxFit.cover) : null,
+          ),
+          child: (photo == null || photo.isEmpty)
+              ? Center(
+                  child: Text(
+                    name.isNotEmpty ? name[0].toUpperCase() : 'D',
+                    style: GoogleFonts.poppins(color: JT.textSecondary, fontSize: 20, fontWeight: FontWeight.w700),
+                  ),
+                )
+              : null,
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: GoogleFonts.poppins(fontSize: 15.5, fontWeight: FontWeight.w700, color: JT.textPrimary)),
+              const SizedBox(height: 2),
+              Row(
+                children: [
+                  const Icon(Icons.star_rounded, color: Color(0xFFF59E0B), size: 14),
+                  const SizedBox(width: 2),
+                  Text(
+                    rating != null ? double.tryParse('$rating')?.toStringAsFixed(1) ?? '$rating' : '--',
+                    style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w600, color: JT.textPrimary),
+                  ),
+                  if (trips != null) ...[
+                    Text(' ($trips trips)', style: GoogleFonts.poppins(fontSize: 11.5, color: JT.textSecondary)),
+                  ],
+                  if (vehicleLine.isNotEmpty) ...[
+                    Text('  ·  ', style: GoogleFonts.poppins(fontSize: 11.5, color: JT.textSecondary)),
+                    Expanded(
+                      child: Text(vehicleLine, maxLines: 1, overflow: TextOverflow.ellipsis, style: GoogleFonts.poppins(fontSize: 11.5, color: JT.textSecondary)),
+                    ),
+                  ],
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 6),
+        _circleActionBtn(
+          icon: Icons.call_rounded,
+          color: JT.success,
+          // Same source _startPoolCall itself reads from — the driver payload
+          // (flat or nested, see _resolveDriver) never carries a user id, only
+          // booking['driver_id'] does.
+          enabled: _booking?['driver_id']?.toString().isNotEmpty ?? false,
+          onTap: _startPoolCall,
+        ),
+        const SizedBox(width: 8),
+        _circleActionBtn(
+          icon: Icons.chat_bubble_rounded,
+          color: JT.primary,
+          enabled: true,
+          onTap: _openPoolChat,
+        ),
+        const SizedBox(width: 8),
+        _buildMoreMenuButton(seats, fare),
+      ],
+    );
+  }
+
+  Widget _circleActionBtn({
+    required IconData icon,
+    required Color color,
+    required bool enabled,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: enabled ? onTap : null,
+      child: Container(
+        width: 38,
+        height: 38,
+        decoration: BoxDecoration(color: color.withValues(alpha: enabled ? 0.12 : 0.05), shape: BoxShape.circle),
+        child: Icon(icon, color: enabled ? color : color.withValues(alpha: 0.35), size: 17),
+      ),
+    );
+  }
+
+  // "More" — Share Trip / Trip Details / Help & Support / Report an Issue /
+  // Cancel Trip, all reusing existing flows (poolShare endpoint, the
+  // existing Ride Details sheet, PoolSupportScreen, ReportIssueScreen, and
+  // the existing PoolCancellationScreen flow) rather than new ones.
+  Widget _buildMoreMenuButton(int seats, double fare) {
+    final canCancel = _status == 'pending_driver_accept' || _status == 'matched';
+    return PopupMenuButton<String>(
+      tooltip: '',
+      offset: const Offset(0, 44),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      onSelected: (value) {
+        switch (value) {
+          case 'share':
+            _shareTrip();
+            break;
+          case 'details':
+            _openRideDetailsSheet(seats, fare, true);
+            break;
+          case 'support':
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => PoolSupportScreen(module: 'local_pool', referenceId: widget.requestId, title: 'Pool Support'),
+              ),
+            );
+            break;
+          case 'report':
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => ReportIssueScreen(
+                  referenceId: widget.requestId,
+                  module: 'local_pool',
+                  referenceType: 'request',
+                  title: 'Report Pool Issue',
+                ),
+              ),
+            );
+            break;
+          case 'cancel':
+            _openCancellationFlow();
+            break;
+        }
+      },
+      itemBuilder: (context) => [
+        PopupMenuItem(value: 'share', child: _menuRow(Icons.share_outlined, 'Share Trip', JT.primary)),
+        PopupMenuItem(value: 'details', child: _menuRow(Icons.info_outline_rounded, 'Trip Details', JT.primary)),
+        PopupMenuItem(value: 'support', child: _menuRow(Icons.support_agent_rounded, 'Help & Support', JT.primary)),
+        PopupMenuItem(value: 'report', child: _menuRow(Icons.report_gmailerrorred_rounded, 'Report an Issue', JT.primary)),
+        if (canCancel) PopupMenuItem(value: 'cancel', child: _menuRow(Icons.cancel_rounded, 'Cancel Trip', JT.error)),
+      ],
+      child: Container(
+        width: 38,
+        height: 38,
+        decoration: BoxDecoration(color: JT.textSecondary.withValues(alpha: 0.08), shape: BoxShape.circle),
+        child: const Icon(Icons.more_vert_rounded, color: JT.textSecondary, size: 19),
+      ),
+    );
+  }
+
+  Widget _menuRow(IconData icon, String label, Color color) {
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      Icon(icon, color: color, size: 18),
+      const SizedBox(width: 10),
+      Text(label, style: GoogleFonts.poppins(color: color, fontWeight: FontWeight.w600, fontSize: 14)),
+    ]);
+  }
+
+  Widget _buildLiveStatusCard(IconData icon, String title, String subtitle, double? distKm, int? etaMin) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: JT.success.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: JT.success.withValues(alpha: 0.18)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(color: JT.success.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(12)),
+            child: Icon(icon, color: JT.success, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w700, color: JT.textPrimary)),
+                const SizedBox(height: 2),
+                Text(subtitle, style: GoogleFonts.poppins(fontSize: 11.5, color: JT.textSecondary)),
+              ],
+            ),
+          ),
+          if (distKm != null) ...[
+            const SizedBox(width: 8),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(_formatDistanceCompact(distKm), style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w700, color: JT.textPrimary)),
+                Text('away', style: GoogleFonts.poppins(fontSize: 10, color: JT.textSecondary)),
+              ],
+            ),
+            if (etaMin != null) ...[
+              const SizedBox(width: 14),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text('$etaMin min', style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w700, color: JT.textPrimary)),
+                  Text('arrival', style: GoogleFonts.poppins(fontSize: 10, color: JT.textSecondary)),
+                ],
+              ),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _pinBox(String otp) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: JT.primary.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: JT.primary.withValues(alpha: 0.16)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.lock_rounded, color: JT.primary, size: 18),
+          const SizedBox(width: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('PIN', style: GoogleFonts.poppins(fontSize: 10, fontWeight: FontWeight.w600, color: JT.textSecondary)),
+              Text(otp, style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w800, color: JT.textPrimary, letterSpacing: 1)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sosBox() {
+    return GestureDetector(
+      onTap: _sendSos,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: JT.error.withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: JT.error.withValues(alpha: 0.2)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.shield_rounded, color: JT.error, size: 18),
+            const SizedBox(width: 8),
+            Text('SOS', style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w800, color: JT.error)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSafeRideFooter() {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Icon(Icons.shield_outlined, size: 12, color: Color(0xFF9CA3AF)),
+        const SizedBox(width: 5),
+        Text("You're in a safe ride", style: GoogleFonts.poppins(fontSize: 10.5, color: const Color(0xFF9CA3AF))),
+      ],
+    );
+  }
+
+  // Reuses PoolSafetyScreen's exact SOS call (ApiConfig.sos, same payload
+  // shape) so the compact SOS button on the main screen and the full Pool
+  // Safety screen trigger the same real emergency alert — just reachable in
+  // one tap here, with the same confirmation dialog first.
+  Future<void> _sendSos() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Send Pool SOS'),
+        content: const Text('Emergency alert will be sent using JAGO safety operations.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: JT.error),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Send SOS'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    try {
+      final headers = await AuthService.getHeaders();
+      await http.post(
+        Uri.parse(ApiConfig.sos),
+        headers: {...headers, 'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'tripId': widget.requestId,
+          'message': 'Customer SOS alert during pool trip',
+          'module': 'local_pool',
+          'referenceId': widget.requestId,
+        }),
+      ).timeout(const Duration(seconds: 15));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('SOS sent. JAGO safety team has been alerted.')),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('SOS failed. Please call 100 immediately.')),
+      );
+    }
+  }
+
+  // Reuses PoolSafetyScreen's exact share call (ApiConfig.poolShare).
+  Future<void> _shareTrip() async {
+    try {
+      final headers = await AuthService.getHeaders();
+      headers['Content-Type'] = 'application/json';
+      final res = await http.post(
+        Uri.parse(ApiConfig.poolShare),
+        headers: headers,
+        body: jsonEncode({'module': 'local_pool', 'referenceId': widget.requestId}),
+      ).timeout(const Duration(seconds: 15));
+      final body = jsonDecode(res.body);
+      if (res.statusCode == 200) {
+        final text = body['shareText']?.toString() ?? 'JAGO Pool trip details';
+        await Clipboard.setData(ClipboardData(text: text));
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Trip details copied. Share with family or emergency contacts.')),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not prepare share details right now')),
+      );
+    }
+  }
+
+  // ── Legacy sheet (searching / dropped / cancelled / search_timeout) ──────
+  // Unchanged — out of scope for the live-tracking redesign above.
+
+  Widget _buildLegacySheetBody(Map<String, dynamic>? driver, int seats, double fare, String otp) {
     if (_status == 'cancelled' || _status == 'search_timeout') {
       final isTimeout = _status == 'search_timeout';
       return CancelledTripCard(
@@ -1072,31 +1616,111 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
   // than the small bordered "Live Movement" card this used to render, which
   // left large empty margins once stretched to fill the full-height slot the
   // caller actually gives it.
+  Future<void> _recenterMap() async {
+    final target = _driverLatLng ?? _pickupLatLng() ?? _dropLatLng();
+    if (target == null || _mapController == null) return;
+    await _mapController!.animateCamera(CameraUpdate.newLatLngZoom(target, 15));
+  }
+
+  LatLng? _pickupLatLng() {
+    final lat = double.tryParse('${_booking?['pickup_lat'] ?? ''}');
+    final lng = double.tryParse('${_booking?['pickup_lng'] ?? ''}');
+    return (lat != null && lng != null) ? LatLng(lat, lng) : null;
+  }
+
+  LatLng? _dropLatLng() {
+    final lat = double.tryParse('${_booking?['drop_lat'] ?? ''}');
+    final lng = double.tryParse('${_booking?['drop_lng'] ?? ''}');
+    return (lat != null && lng != null) ? LatLng(lat, lng) : null;
+  }
+
   Widget _buildTrackingMap() {
-    final pickupLat = double.tryParse('${_booking?['pickup_lat'] ?? ''}');
-    final pickupLng = double.tryParse('${_booking?['pickup_lng'] ?? ''}');
-    final dropLat = double.tryParse('${_booking?['drop_lat'] ?? ''}');
-    final dropLng = double.tryParse('${_booking?['drop_lng'] ?? ''}');
-    final pickup = (pickupLat != null && pickupLng != null) ? LatLng(pickupLat, pickupLng) : null;
-    final drop = (dropLat != null && dropLng != null) ? LatLng(dropLat, dropLng) : null;
+    final pickup = _pickupLatLng();
+    final drop = _dropLatLng();
     // Same Hyderabad fallback TrackingScreen seeds its camera with — pickup/
     // drop are set at booking time so this only ever applies for the first
     // frame or two before _booking has loaded.
     final center = _driverLatLng ?? pickup ?? drop ?? const LatLng(17.3850, 78.4867);
 
+    // Driver-to-next-stop route: pickup while the customer hasn't boarded
+    // yet, drop once onboard — same target _liveDistanceKm tracks.
+    final headingToDrop = _status == 'picked_up';
+    final routeTarget = headingToDrop ? drop : pickup;
+    final polylines = (_driverLatLng != null && routeTarget != null)
+        ? {
+            Polyline(
+              polylineId: const PolylineId('pool_driver_route'),
+              points: [_driverLatLng!, routeTarget],
+              color: JT.primary,
+              width: 5,
+              startCap: Cap.roundCap,
+              endCap: Cap.roundCap,
+            ),
+          }
+        : <Polyline>{};
+
+    final distKm = _liveDistanceKm();
+    final etaMin = _liveEtaMinutes(distKm);
+    final showInfoBubble = _isLiveTrackingState && distKm != null;
+
     // Markers are built asynchronously via _updateLiveMapMarkers (called from
     // _load/socket handlers whenever booking/driver-location data changes) so
     // they show the actual matched vehicle's icon (JagoMapMarkers.vehicle),
     // not a generic colored pin.
-    return GoogleMap(
-      initialCameraPosition: CameraPosition(target: center, zoom: 14),
-      style: Theme.of(context).brightness == Brightness.dark ? kMapNightStyle : null,
-      markers: _liveMapMarkers,
-      myLocationEnabled: false,
-      myLocationButtonEnabled: false,
-      zoomControlsEnabled: false,
-      mapToolbarEnabled: false,
-      compassEnabled: false,
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: GoogleMap(
+            initialCameraPosition: CameraPosition(target: center, zoom: 14),
+            style: Theme.of(context).brightness == Brightness.dark ? kMapNightStyle : null,
+            onMapCreated: (c) => _mapController = c,
+            markers: _liveMapMarkers,
+            polylines: polylines,
+            myLocationEnabled: false,
+            myLocationButtonEnabled: false,
+            zoomControlsEnabled: false,
+            mapToolbarEnabled: false,
+            compassEnabled: false,
+          ),
+        ),
+        if (showInfoBubble)
+          Positioned(
+            top: 14,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(999),
+                  boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.12), blurRadius: 12, offset: const Offset(0, 4))],
+                ),
+                child: Text(
+                  '${_formatDistanceCompact(distKm)}${etaMin != null ? ' • $etaMin min' : ''}',
+                  style: GoogleFonts.poppins(fontSize: 12.5, fontWeight: FontWeight.w700, color: JT.textPrimary),
+                ),
+              ),
+            ),
+          ),
+        Positioned(
+          bottom: 16,
+          right: 16,
+          child: GestureDetector(
+            onTap: _recenterMap,
+            child: Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.12), blurRadius: 12, offset: const Offset(0, 4))],
+              ),
+              child: const Icon(Icons.my_location_rounded, color: JT.primary, size: 20),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
