@@ -1,7 +1,7 @@
 name: jago_customer
 description: JAGO - Move Smarter.
 publish_to: 'none'
-version: 1.0.107+107
+version: 1.0.109+109
 
 environment:
   sdk: '>=3.0.0 <4.0.0'

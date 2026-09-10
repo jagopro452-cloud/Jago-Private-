@@ -1688,7 +1688,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _homeServiceTile(
         label: 'Auto',
         vehicleKey: 'auto',
-        imageUrl: 'https://res.cloudinary.com/kits/image/upload/q_auto/f_auto/v1775125550/ChatGPT_Image_Apr_2_2026_03_55_30_PM_ywb7fj.png',
         labelFontSize: 14 * textScale,
         onTap: () => Navigator.push(
           context,
@@ -1709,7 +1708,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _homeServiceTile(
         label: 'Cab',
         vehicleKey: 'cab',
-        imageUrl: 'https://res.cloudinary.com/dg5ct7fys/image/upload/f_auto,q_auto/ChatGPT_Image_Apr_17_2026_11_27_28_AM_w0rcnh',
         labelFontSize: 14 * textScale,
         onTap: () => Navigator.push(
           context,
@@ -1728,9 +1726,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     addTile(
       'sedan',
       _homeServiceTile(
-        label: 'Premium',
-        vehicleKey: 'premium',
-        imageUrl: 'https://res.cloudinary.com/dg5ct7fys/image/upload/f_auto,q_auto/ChatGPT_Image_Apr_17_2026_11_31_05_AM_kavp5e',
+        label: 'SUV / XL',
+        vehicleKey: 'suv',
         labelFontSize: 12 * textScale,
         artworkWidth: 72,
         artworkRight: -8,
@@ -1739,6 +1736,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           MaterialPageRoute(
             builder: (_) => PremiumLocationScreen(
               serviceType: 'ride',
+              // Internal fare-matching key — unchanged so the existing
+              // Premium/SUV fare grouping logic (_fareMatchesCategoryName)
+              // keeps working; only the on-screen label/image were rebranded.
               vehicleCategoryName: 'Premium',
               pickupAddress: _pickup.isNotEmpty ? _pickup : null,
               pickupLat: _pickupLat,
@@ -2323,10 +2323,10 @@ class _StaticAllServicesSheet extends StatelessWidget {
   List<Map<String, dynamic>> _visibleServices() {
     const all = [
       {'name': 'JAGO Bike', 'imageUrl': 'https://res.cloudinary.com/dg5ct7fys/image/upload/e_make_transparent:15/q_auto/f_png/v1780037646/ChatGPT_Image_May_29_2026_12_22_50_PM_rhxgf4.png', 'type': 'ride', 'cat': 'Bike', 'serviceKey': 'bike_ride'},
-      {'name': 'JAGO Auto', 'imageUrl': 'https://res.cloudinary.com/dg5ct7fys/image/upload/e_make_transparent:15/q_auto/f_png/v1780037799/ChatGPT_Image_May_29_2026_12_26_23_PM_gr1npy.png', 'type': 'ride', 'cat': 'Auto', 'serviceKey': 'auto_ride'},
-      {'name': 'JAGO Mini', 'imageUrl': 'https://res.cloudinary.com/dg5ct7fys/image/upload/e_make_transparent:15/q_auto/f_png/v1780037873/ChatGPT_Image_May_29_2026_12_27_19_PM_sbimsr.png', 'type': 'ride', 'cat': 'Mini', 'serviceKey': 'mini_car'},
-      {'name': 'JAGO Sedan', 'imageUrl': 'https://res.cloudinary.com/dg5ct7fys/image/upload/e_make_transparent:15/q_auto/f_png/v1780038163/ChatGPT_Image_May_29_2026_12_31_37_PM_ys5bjt.png', 'type': 'ride', 'cat': 'Sedan', 'serviceKey': 'sedan'},
-      {'name': 'JAGO SUV', 'imageUrl': 'https://res.cloudinary.com/dg5ct7fys/image/upload/e_make_transparent:15/q_auto/f_png/v1780038163/ChatGPT_Image_May_29_2026_12_31_37_PM_ys5bjt.png', 'type': 'ride', 'cat': 'SUV', 'serviceKey': 'suv'},
+      {'name': 'JAGO Auto', 'imageUrl': 'https://res.cloudinary.com/umg8p3bl/image/upload/f_auto,q_auto/ChatGPT_Image_Sep_10_2026_11_29_29_AM', 'type': 'ride', 'cat': 'Auto', 'serviceKey': 'auto_ride'},
+      {'name': 'JAGO Mini', 'imageUrl': 'https://res.cloudinary.com/umg8p3bl/image/upload/v1789036055/ChatGPT_Image_Sep_10_2026_03_57_16_PM.png', 'type': 'ride', 'cat': 'Mini', 'serviceKey': 'mini_car'},
+      {'name': 'JAGO Sedan', 'imageUrl': 'https://res.cloudinary.com/umg8p3bl/image/upload/f_auto,q_auto/ChatGPT_Image_Sep_10_2026_11_34_17_AM', 'type': 'ride', 'cat': 'Sedan', 'serviceKey': 'sedan'},
+      {'name': 'JAGO SUV', 'imageUrl': 'https://res.cloudinary.com/umg8p3bl/image/upload/v1789035879/ChatGPT_Image_Sep_10_2026_03_54_23_PM.png', 'type': 'ride', 'cat': 'SUV', 'serviceKey': 'suv'},
       {'name': 'JAGO Share', 'imageUrl': 'https://res.cloudinary.com/dg5ct7fys/image/upload/e_make_transparent:15/q_auto/f_png/v1780038580/ChatGPT_Image_May_29_2026_12_39_20_PM_s8j1bs.png', 'type': 'ride', 'cat': 'Share', 'serviceKey': 'city_pool'},
       {'name': 'JAGO Parcel', 'imageUrl': 'https://res.cloudinary.com/kits/image/upload/v1775367404/be5b86c2-7a8a-4dbd-ad33-e8da2b627d5e_vurdrg.png', 'type': 'parcel', 'cat': 'Parcel', 'serviceKey': 'parcel_delivery'},
       {'name': 'JAGO Outstation', 'imageUrl': 'https://res.cloudinary.com/dg5ct7fys/image/upload/e_make_transparent:15/q_auto/f_png/v1780038697/ChatGPT_Image_May_29_2026_12_41_11_PM_xoynqv.png', 'type': 'ride', 'cat': 'Outstation', 'serviceKey': 'outstation_pool'},

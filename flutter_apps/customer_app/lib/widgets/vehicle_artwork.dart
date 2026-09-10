@@ -26,6 +26,21 @@ class VehicleArtwork extends StatelessWidget {
     this.tint,
   });
 
+  /// PRIORITY 0: Exact vehicle photos supplied by the business for Auto,
+  /// Sedan, Cab, SUV/XL and Mini. These always win over admin icons and
+  /// local 3D art for these categories — single source of truth shared by
+  /// the Home Screen and the ride vehicle-selection screen.
+  /// 'premium' is aliased to the same SUV/XL photo since that category was
+  /// visually rebranded from "Premium" to "SUV / XL".
+  static const Map<String, String> providedPhotos = {
+    'auto': 'https://res.cloudinary.com/umg8p3bl/image/upload/f_auto,q_auto/ChatGPT_Image_Sep_10_2026_11_29_29_AM',
+    'sedan': 'https://res.cloudinary.com/umg8p3bl/image/upload/f_auto,q_auto/ChatGPT_Image_Sep_10_2026_11_34_17_AM',
+    'cab': 'https://res.cloudinary.com/umg8p3bl/image/upload/f_auto,q_auto/ChatGPT_Image_Sep_10_2026_11_35_14_AM',
+    'suv': 'https://res.cloudinary.com/umg8p3bl/image/upload/v1789035879/ChatGPT_Image_Sep_10_2026_03_54_23_PM.png',
+    'mini_car': 'https://res.cloudinary.com/umg8p3bl/image/upload/v1789036055/ChatGPT_Image_Sep_10_2026_03_57_16_PM.png',
+    'premium': 'https://res.cloudinary.com/umg8p3bl/image/upload/v1789035879/ChatGPT_Image_Sep_10_2026_03_54_23_PM.png',
+  };
+
   /// Official JAGO customer app PNG artwork (home + booking).
   /// PRIORITY 1: Local bundled 3D PNGs for offline consistency.
   static const Map<String, String> localPng3D = {
@@ -160,6 +175,19 @@ class VehicleArtwork extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // PRIORITY 0: Business-supplied photo for Auto/Sedan/Cab/SUV-XL/Mini.
+    final provided = providedPhotos[normalizeKey(vehicleKey)];
+    if (provided != null) {
+      return CachedNetworkImage(
+        imageUrl: provided,
+        width: width,
+        height: height,
+        fit: fit,
+        placeholder: (_, __) => const SizedBox.shrink(),
+        errorWidget: (_, __, ___) => _local(),
+      );
+    }
+
     // PRIORITY 1: Explicit Network / Admin Icon (if provided)
     final url = resolveDisplayUrl(
       nameOrKey: vehicleKey,

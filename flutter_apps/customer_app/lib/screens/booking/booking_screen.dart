@@ -19,7 +19,7 @@ import '../../services/vehicle_status_service.dart';
 import '../../widgets/booking/address_row.dart';
 import '../../widgets/booking/booking_map_shell.dart';
 import '../../widgets/booking/inline_info_card.dart';
-import '../../widgets/booking/shared_ride_card.dart';
+import '../../widgets/vehicle_artwork.dart';
 import '../car_share/car_share_options_screen.dart';
 import '../tracking/tracking_screen.dart';
 
@@ -88,6 +88,13 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
   // (the location screen only enables "Confirm Trip" once both are chosen),
   // so the route-review step has nothing left to verify — start on vehicle.
   _BookingStep _bookingStep = _BookingStep.vehicle;
+  // Ride mode is a separate axis from vehicle type: 'normal' shows the
+  // Bike/Auto/Car cards from _allFares; 'carShare' hides them entirely and
+  // hands off to CarShareOptionsScreen instead. Never inferred from
+  // vehicleType/isCarpool — only ever set by an explicit tap on the
+  // ride-mode toggle below, and reset to 'normal' whenever that screen is
+  // popped back to (see _openCarShare).
+  String _rideMode = 'normal';
   
   Set<Polyline> _polylines = {};
   double _routedDistanceKm = 0.0;
@@ -1370,7 +1377,7 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
         builder: (context, snapshot) {
           final statuses = snapshot.data ?? {};
           final visibleFares = _visibleFareEntries(statuses);
-          final canContinueFromVehicle =
+          final canContinueFromVehicle = _rideMode == 'normal' &&
               !_estimating && visibleFares.isNotEmpty && _selectedFareIndex < _allFares.length;
           final canContinueFromFare = !_loading && !_estimating;
           final screenHeight = MediaQuery.of(context).size.height;
@@ -1499,7 +1506,8 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
       case _BookingStep.route:
         return 'Continue';
       case _BookingStep.vehicle:
-        return canContinueFromVehicle ? 'Choose Vehicle' : 'No Vehicles Available';
+        if (_rideMode == 'carShare') return 'Tap Car Share above to continue';
+        return canContinueFromVehicle ? 'Continue' : 'No Vehicles Available';
       case _BookingStep.farePayment:
         if (!canContinueFromFare) return 'Please Wait';
         return _bookForSomeone ? 'Confirm & Continue' : 'Confirm Trip';
@@ -1573,49 +1581,26 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
           ),
         );
       case _BookingStep.vehicle:
+        // Car Share only applies to point-to-point rides with a real drop
+        // set (matches the destLat/destLng != 0 guard the old inline
+        // SharedRideCard used) — never for parcel bookings.
+        final carShareEligible = widget.category != 'parcel' &&
+            widget.destLat != 0 && widget.destLng != 0;
         return SingleChildScrollView(
           key: const ValueKey('vehicle'),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _buildStepSectionTitle('Vehicle selection'),
-              // TEMP diagnostic: shows the Home-screen category this screen
-              // was opened with and what _allFares actually resolved to, so
-              // the Cab/Premium-shows-everything issue can be traced on an
-              // installed release build. Remove once confirmed fixed.
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4),
-                child: Text(
-                  'target=${widget.vehicleCategoryName ?? "(none)"} '
-                  'allFares=${_allFares.map((f) => f['vehicleCategoryName'] ?? f['vehicleName'] ?? f['name']).join(",")}',
-                  style: const TextStyle(fontSize: 10, color: Color(0xFFEF4444)),
-                ),
-              ),
+              _buildStepSectionTitle('Choose your ride'),
               const SizedBox(height: 12),
-              _buildVehicleSelector(statuses),
-              if (widget.category != 'parcel' && widget.destLat != 0 && widget.destLng != 0) ...[
-                const SizedBox(height: 4),
-                SharedRideCard(
-                  pickupLat: widget.pickupLat,
-                  pickupLng: widget.pickupLng,
-                  dropLat: widget.destLat,
-                  dropLng: widget.destLng,
-                  comparisonFare: _fare?['estimatedFare'] != null ? (_fare!['estimatedFare'] as num).toDouble() : null,
-                  onTap: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => CarShareOptionsScreen(
-                        pickupAddress: widget.pickup,
-                        pickupLat: widget.pickupLat,
-                        pickupLng: widget.pickupLng,
-                        dropAddress: widget.destination,
-                        dropLat: widget.destLat,
-                        dropLng: widget.destLng,
-                      ),
-                    ),
-                  ),
-                ),
+              if (carShareEligible) ...[
+                _buildRideModeToggle(),
+                const SizedBox(height: 16),
               ],
+              if (_rideMode == 'carShare')
+                _buildCarShareTransition()
+              else
+                _buildVehicleSelector(statuses),
             ],
           ),
         );
@@ -1791,8 +1776,6 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
   }
 
   Widget _buildVehicleSummaryCard() {
-    final imgKey = _vehicleImageKey(_vehicleName);
-    final imgUrl = imgKey != null ? _vehicleImageUrls[imgKey] : null;
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
@@ -1806,10 +1789,7 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
           height: 42,
           decoration: BoxDecoration(color: JT.surfaceAlt, borderRadius: BorderRadius.circular(10)),
           padding: const EdgeInsets.all(5),
-          child: imgUrl != null
-              ? Image.network(imgUrl, fit: BoxFit.contain,
-                  errorBuilder: (_, __, ___) => Icon(_iconForVehicle(_vehicleName), color: JT.primary, size: 18))
-              : Icon(_iconForVehicle(_vehicleName), color: JT.primary, size: 18),
+          child: VehicleArtwork(vehicleKey: _vehicleName, fit: BoxFit.contain),
         ),
         const SizedBox(width: 10),
         Expanded(
@@ -2179,6 +2159,119 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
     });
   }
 
+  // Ride-mode toggle: the only place rideMode changes. "Normal Ride" just
+  // flips state back so the vehicle cards render; "Car Share" hands off to
+  // the dedicated (already vehicle-agnostic) CarShareOptionsScreen. Vehicle
+  // selection is never touched by this — _selectedFareIndex keeps whatever
+  // it was so returning to Normal Ride restores the prior pick.
+  Widget _buildRideModeToggle() {
+    Widget pill({
+      required String mode,
+      required IconData icon,
+      required String title,
+      required String subtitle,
+    }) {
+      final selected = _rideMode == mode;
+      return Expanded(
+        child: GestureDetector(
+          onTap: () => mode == 'carShare' ? _openCarShare() : _switchToNormalRide(),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+            decoration: BoxDecoration(
+              color: selected ? const Color(0xFF7C3AED).withValues(alpha: 0.08) : Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: selected ? const Color(0xFF7C3AED) : JT.border,
+                width: selected ? 2 : 1,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(icon, size: 22, color: selected ? const Color(0xFF7C3AED) : const Color(0xFF64748B)),
+                const SizedBox(height: 8),
+                Text(title,
+                    style: GoogleFonts.poppins(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: selected ? const Color(0xFF7C3AED) : const Color(0xFF1E293B),
+                    )),
+                const SizedBox(height: 2),
+                Text(subtitle,
+                    style: GoogleFonts.poppins(fontSize: 11, color: const Color(0xFF64748B))),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        pill(
+          mode: 'normal',
+          icon: Icons.directions_car_filled_rounded,
+          title: 'Normal Ride',
+          subtitle: 'Bike, Auto or Car',
+        ),
+        const SizedBox(width: 10),
+        pill(
+          mode: 'carShare',
+          icon: Icons.people_alt_rounded,
+          title: 'Car Share',
+          subtitle: 'Share & save',
+        ),
+      ],
+    );
+  }
+
+  void _switchToNormalRide() {
+    if (_rideMode == 'normal') return;
+    HapticFeedback.selectionClick();
+    setState(() => _rideMode = 'normal');
+  }
+
+  void _openCarShare() {
+    HapticFeedback.selectionClick();
+    setState(() => _rideMode = 'carShare');
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CarShareOptionsScreen(
+          pickupAddress: widget.pickup,
+          pickupLat: widget.pickupLat,
+          pickupLng: widget.pickupLng,
+          dropAddress: widget.destination,
+          dropLat: widget.destLat,
+          dropLng: widget.destLng,
+        ),
+      ),
+    ).then((_) {
+      // Coming back from Car Share always lands back on Normal Ride — the
+      // vehicle cards, never a leftover Car Share body.
+      if (mounted) setState(() => _rideMode = 'normal');
+    });
+  }
+
+  // Brief placeholder shown only for the frame between tapping the Car
+  // Share pill and the pushed route taking over — the vehicle cards must
+  // never be visible at the same time as this. No shared-ride fare/ETA
+  // content lives here; CarShareOptionsScreen owns that entirely.
+  Widget _buildCarShareTransition() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 40),
+      alignment: Alignment.center,
+      child: const SizedBox(
+        width: 24,
+        height: 24,
+        child: CircularProgressIndicator(strokeWidth: 2.5, color: Color(0xFF7C3AED)),
+      ),
+    );
+  }
+
   Widget _buildVehicleSelector(Map<String, VehicleStatus> statuses) {
     if (_estimating) {
       return Padding(
@@ -2292,13 +2385,7 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
                       color: isSelected ? selColor.withValues(alpha: 0.1) : const Color(0xFFF9FAFB),
                       borderRadius: BorderRadius.circular(16),
                     ),
-                    child: Builder(builder: (_) {
-                      final imgKey = _vehicleImageKey(name);
-                      final imgUrl = imgKey != null ? _vehicleImageUrls[imgKey] : null;
-                      return imgUrl != null 
-                          ? Image.network(imgUrl, fit: BoxFit.contain)
-                          : Center(child: Text(_emojiForVehicle(name), style: const TextStyle(fontSize: 32)));
-                    }),
+                    child: VehicleArtwork(vehicleKey: name, fit: BoxFit.contain),
                   ),
                   const SizedBox(width: 16),
                   
