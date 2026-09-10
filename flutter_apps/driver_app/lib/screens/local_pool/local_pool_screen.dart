@@ -16,9 +16,8 @@ import '../chat/trip_chat_sheet.dart';
 import '../profile/support_chat_screen.dart';
 import '../../widgets/driver/draggable_map_sheet.dart';
 import '../../widgets/driver/sheet_handle.dart';
-import '../../widgets/pool/pool_status_floating_card.dart';
-import '../../widgets/pool/pool_dynamic_action_card.dart';
-import '../../widgets/pool/pool_seat_strip.dart';
+import '../../widgets/pool/pool_seat_selector_strip.dart';
+import '../../widgets/pool/pool_slide_to_confirm.dart';
 import '../../widgets/pool/pool_stops_sheet.dart';
 import '../../widgets/pool/pool_safety_sheet.dart';
 import '../../widgets/pool/pool_incoming_request_modal.dart';
@@ -90,6 +89,16 @@ class _LocalPoolScreenState extends State<LocalPoolScreen> {
   // pool:new_passenger events for the same request (e.g. a reconnect resend)
   // and is cleared once the driver has acted on that request.
   String? _lastPromptedRequestId;
+
+  // Which seat card the driver has explicitly tapped — null means "no
+  // explicit choice yet, follow _focusedPassenger() automatically". See
+  // _resolveSelectedIndex.
+  int? _selectedSeatIndex;
+  GoogleMapController? _mapController;
+  // Draggable bottom sheet height (fraction of screen height) — mirrors
+  // TripScreen's identical _panelHeightFraction mechanic so both driver
+  // screens drag the same way.
+  double? _sheetHeightFraction;
 
   @override
   void initState() {
@@ -362,13 +371,19 @@ class _LocalPoolScreenState extends State<LocalPoolScreen> {
     }
   }
 
-  // ── Redesigned dynamic-card state derivation ──────────────────────────────
+  // ── Seat-slot derivation ───────────────────────────────────────────────────
+  //
+  // There is no backend "seat number" concept (pool_ride_requests only ever
+  // tracked an aggregate maxSeats/availableSeats count) — the seat cards are
+  // a purely client-side visual grouping of the existing passenger list into
+  // maxSeats slots, in list order, each passenger consuming seatsRequested
+  // consecutive slots. Nothing here changes what the server considers a
+  // "seat"; it only changes how the same data is laid out on screen.
 
-  /// The single passenger the dynamic bottom card should front right now.
-  /// Priority: a passenger waiting on Accept/Skip outranks one already
-  /// matched, which outranks one already onboard — matching the order a
-  /// driver actually needs to act on next. Everyone else stays reachable via
-  /// "View All Stops" instead of being hidden.
+  /// The single passenger the bottom sheet should front by default — same
+  /// priority TripScreen/the old dynamic card used: a passenger waiting on
+  /// Accept/Skip outranks one already matched, which outranks one already
+  /// onboard, matching the order a driver actually needs to act on next.
   Map<String, dynamic>? _focusedPassenger() {
     Map<String, dynamic>? firstWithStatus(String status) {
       for (final p in _passengers) {
@@ -381,22 +396,6 @@ class _LocalPoolScreenState extends State<LocalPoolScreen> {
     return firstWithStatus('pending_driver_accept') ?? firstWithStatus('matched') ?? firstWithStatus('picked_up');
   }
 
-  PoolCardState _poolCardStateFor(Map<String, dynamic>? focused) {
-    switch (focused?['status']?.toString()) {
-      case 'pending_driver_accept':
-        return PoolCardState.newRequestPending;
-      case 'matched':
-        return PoolCardState.headingToPickup;
-      case 'picked_up':
-        return PoolCardState.onboard;
-      default:
-        if (_passengers.isNotEmpty && _passengers.every((p) => (p as Map<String, dynamic>)['status']?.toString() == 'dropped')) {
-          return PoolCardState.allDropped;
-        }
-        return PoolCardState.idleWaiting;
-    }
-  }
-
   (int, int) get _seatCounts {
     final maxSeats = int.tryParse('${_seatState?['maxSeats'] ?? _session?['max_seats'] ?? _maxSeats}') ?? _maxSeats;
     final available = int.tryParse('${_seatState?['availableSeats'] ?? _session?['available_seats'] ?? maxSeats}') ?? maxSeats;
@@ -404,14 +403,40 @@ class _LocalPoolScreenState extends State<LocalPoolScreen> {
     return (maxSeats, occupied);
   }
 
-  void _openSeatSheet() {
-    final (maxSeats, occupied) = _seatCounts;
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (_) => PoolSeatSheet(maxSeats: maxSeats, occupied: occupied),
-    );
+  static const _activeSeatStatuses = {'pending_driver_accept', 'matched', 'picked_up'};
+
+  List<PoolSeatSlot> _seatSlots() {
+    final (maxSeats, _) = _seatCounts;
+    final slots = List<PoolSeatSlot>.filled(maxSeats, const PoolSeatSlot(null));
+    var idx = 0;
+    for (final p in _passengers) {
+      if (idx >= maxSeats) break;
+      final m = p as Map<String, dynamic>;
+      if (!_activeSeatStatuses.contains(m['status']?.toString() ?? '')) continue;
+      final seatsReq = (int.tryParse('${m['seats_requested'] ?? 1}') ?? 1).clamp(1, maxSeats);
+      for (var i = 0; i < seatsReq && idx < maxSeats; i++, idx++) {
+        slots[idx] = PoolSeatSlot(m);
+      }
+    }
+    return slots;
+  }
+
+  /// Resolves the seat index actually shown as selected: the driver's own
+  /// tap if it still points at an occupied seat, otherwise falls back to
+  /// [_focusedPassenger]'s slot (auto-selected) so the sheet is never left
+  /// pointing at nothing while a passenger is in progress.
+  int _resolveSelectedIndex(List<PoolSeatSlot> slots) {
+    final explicit = _selectedSeatIndex;
+    if (explicit != null && explicit >= 0 && explicit < slots.length && !slots[explicit].isEmpty) {
+      return explicit;
+    }
+    final focused = _focusedPassenger();
+    if (focused != null) {
+      final id = focused['id']?.toString();
+      final i = slots.indexWhere((s) => s.passenger?['id']?.toString() == id);
+      if (i != -1) return i;
+    }
+    return slots.indexWhere((s) => !s.isEmpty);
   }
 
   void _openStopsSheet() {
@@ -765,19 +790,33 @@ class _LocalPoolScreenState extends State<LocalPoolScreen> {
     return parsed;
   }
 
-  Widget _buildPoolMapHero() {
+  Future<void> _recenterOnDriver() async {
+    final lat = _readDouble(_session?['current_lat']);
+    final lng = _readDouble(_session?['current_lng']);
+    if (lat == null || lng == null || _mapController == null) return;
+    await _mapController!.animateCamera(CameraUpdate.newLatLngZoom(LatLng(lat, lng), 15));
+  }
+
+  /// [selectedPassengerId] — the one passenger (see _resolveSelectedIndex)
+  /// whose pickup/drop/route should stand out; every other passenger still
+  /// gets a marker (so the driver keeps the full picture) but in a muted
+  /// color, and the route line is drawn only for the selected stop instead
+  /// of chaining every passenger's points into one cluttered polyline.
+  Widget _buildPoolMapHero(String? selectedPassengerId) {
     final currentLat = _readDouble(_session?['current_lat']);
     final currentLng = _readDouble(_session?['current_lng']);
-    final points = <LatLng>[];
+    LatLng? driverPos;
     final markers = <Marker>{};
+    LatLng? selectedPickup;
+    LatLng? selectedDrop;
+    var selectedStatus = '';
 
     if (currentLat != null && currentLng != null) {
-      final self = LatLng(currentLat, currentLng);
-      points.add(self);
+      driverPos = LatLng(currentLat, currentLng);
       markers.add(
         Marker(
           markerId: const MarkerId('driver'),
-          position: self,
+          position: driverPos,
           infoWindow: const InfoWindow(title: 'Driver'),
           icon: _driverMarkerIcon ??
               BitmapDescriptor.defaultMarkerWithHue(
@@ -794,13 +833,13 @@ class _LocalPoolScreenState extends State<LocalPoolScreen> {
       final dropLat = _readDouble(p['drop_lat'] ?? p['dropLat']);
       final dropLng = _readDouble(p['drop_lng'] ?? p['dropLng']);
       final status = p['status']?.toString() ?? '';
+      final isSelected = selectedPassengerId != null && p['id']?.toString() == selectedPassengerId;
 
       if (pickupLat != null &&
           pickupLng != null &&
           status != 'picked_up' &&
           status != 'dropped') {
         final pickup = LatLng(pickupLat, pickupLng);
-        points.add(pickup);
         markers.add(
           Marker(
             markerId: MarkerId('pickup_$i'),
@@ -810,15 +849,16 @@ class _LocalPoolScreenState extends State<LocalPoolScreen> {
               snippet: p['customer_name']?.toString() ?? 'Passenger',
             ),
             icon: BitmapDescriptor.defaultMarkerWithHue(
-              BitmapDescriptor.hueGreen,
+              isSelected ? BitmapDescriptor.hueGreen : BitmapDescriptor.hueViolet,
             ),
+            zIndexInt: isSelected ? 2 : 1,
           ),
         );
+        if (isSelected) selectedPickup = pickup;
       }
 
       if (dropLat != null && dropLng != null) {
         final drop = LatLng(dropLat, dropLng);
-        points.add(drop);
         markers.add(
           Marker(
             markerId: MarkerId('drop_$i'),
@@ -828,19 +868,28 @@ class _LocalPoolScreenState extends State<LocalPoolScreen> {
               snippet: p['customer_name']?.toString() ?? 'Passenger',
             ),
             icon: BitmapDescriptor.defaultMarkerWithHue(
-              BitmapDescriptor.hueRed,
+              isSelected ? BitmapDescriptor.hueRed : BitmapDescriptor.hueOrange,
             ),
+            zIndexInt: isSelected ? 2 : 1,
           ),
         );
+        if (isSelected) {
+          selectedDrop = drop;
+          selectedStatus = status;
+        }
       }
     }
 
-    final center = points.isNotEmpty ? points.first : const LatLng(17.3850, 78.4867);
-    final polyline = points.length >= 2
+    final routePoints = <LatLng>[
+      if (driverPos != null) driverPos,
+      if (selectedStatus != 'picked_up' && selectedPickup != null) selectedPickup,
+      if (selectedDrop != null) selectedDrop,
+    ];
+    final polyline = routePoints.length >= 2
         ? {
             Polyline(
               polylineId: const PolylineId('pool_route'),
-              points: points,
+              points: routePoints,
               color: JT.primary,
               width: 5,
               startCap: Cap.roundCap,
@@ -849,135 +898,697 @@ class _LocalPoolScreenState extends State<LocalPoolScreen> {
           }
         : <Polyline>{};
 
-    final (maxSeats, occupied) = _seatCounts;
+    final center = driverPos ?? selectedPickup ?? selectedDrop ?? const LatLng(17.3850, 78.4867);
 
     // No rounding here — this hero fills the entire body edge-to-edge (see
     // DraggableMapSheet's Positioned.fill), so a rounded-rect clip on all
     // four corners just exposed the Scaffold's background color in each
     // corner instead of giving a true full-screen map.
     return Stack(
-        children: [
-          Positioned.fill(
-            child: GoogleMap(
-              initialCameraPosition: CameraPosition(target: center, zoom: 13.2),
-              markers: markers,
-              polylines: polyline,
-              myLocationEnabled: false,
-              myLocationButtonEnabled: false,
-              zoomControlsEnabled: false,
-              mapToolbarEnabled: false,
-              compassEnabled: false,
+      children: [
+        Positioned.fill(
+          child: GoogleMap(
+            initialCameraPosition: CameraPosition(target: center, zoom: 13.2),
+            onMapCreated: (c) => _mapController = c,
+            markers: markers,
+            polylines: polyline,
+            myLocationEnabled: false,
+            myLocationButtonEnabled: false,
+            zoomControlsEnabled: false,
+            mapToolbarEnabled: false,
+            compassEnabled: false,
+          ),
+        ),
+        Positioned(
+          top: 16,
+          right: 16,
+          child: GestureDetector(
+            onTap: _recenterOnDriver,
+            child: Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(color: Colors.black.withValues(alpha: 0.12), blurRadius: 12, offset: const Offset(0, 4)),
+                ],
+              ),
+              child: const Icon(Icons.my_location_rounded, color: JT.primary, size: 20),
             ),
           ),
-          Positioned(
-            left: 16,
-            right: 16,
-            top: 16,
-            child: PoolStatusFloatingCard(
-              ridersCount: _passengers.length,
-              accepting: _acceptingNewPassengers,
-              updatingAccepting: _updatingAccepting,
-              onToggleAccepting: _updatingAccepting ? null : _toggleAccepting,
-              maxSeats: maxSeats,
-              occupiedSeats: occupied,
-              onSeatTap: _openSeatSheet,
-            ),
-          ),
-        ],
-      );
+        ),
+      ],
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_loading || _error != null || _session == null) {
+      return Scaffold(
+        backgroundColor: JT.bg,
+        appBar: AppBar(
+          backgroundColor: JT.bg,
+          elevation: 0,
+          surfaceTintColor: Colors.transparent,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20, color: JT.textPrimary),
+            onPressed: () => Navigator.pop(context),
+          ),
+          title: Text('Local Pool', style: GoogleFonts.poppins(fontSize: 17, fontWeight: FontWeight.w600, color: JT.textPrimary)),
+          actions: [
+            IconButton(icon: const Icon(Icons.refresh_rounded, color: JT.primary), onPressed: _load),
+            const SizedBox(width: 4),
+          ],
+        ),
+        body: _loading
+            ? _buildLoadingState()
+            : _error != null
+                ? _buildError()
+                : RefreshIndicator(
+                    onRefresh: _load,
+                    color: JT.primary,
+                    child: ListView(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+                      children: [_buildStarter()],
+                    ),
+                  ),
+      );
+    }
+
+    // ── Active session: compact header + seat strip + ~60/40 map/sheet ──────
+    final slots = _seatSlots();
+    final selectedIndex = _resolveSelectedIndex(slots);
+    final selected = selectedIndex >= 0 ? slots[selectedIndex].passenger : null;
+    final status = selected?['status']?.toString() ?? '';
+
     return Scaffold(
       backgroundColor: JT.bg,
-      appBar: AppBar(
-        backgroundColor: JT.bg,
-        elevation: 0,
-        surfaceTintColor: Colors.transparent,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20, color: JT.textPrimary),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Text('Local Pool', style: GoogleFonts.poppins(fontSize: 17, fontWeight: FontWeight.w600, color: JT.textPrimary)),
-        actions: [
-          IconButton(icon: const Icon(Icons.refresh_rounded, color: JT.primary), onPressed: _load),
-          const SizedBox(width: 4),
+      body: Column(
+        children: [
+          SafeArea(bottom: false, child: _buildActiveHeader()),
+          const SizedBox(height: 12),
+          SizedBox(height: 62, child: PoolSeatSelectorStrip(
+            slots: slots,
+            selectedIndex: selectedIndex,
+            onSeatTap: (i) => setState(() => _selectedSeatIndex = i),
+          )),
+          const SizedBox(height: 12),
+          Expanded(
+            child: DraggableMapSheet(
+              map: _buildPoolMapHero(selected?['id']?.toString()),
+              floatingControls: _buildSafetyPill(),
+              // The sheet's height is a fraction of the *full* screen height
+              // (see heightFraction below — same convention DraggableMapSheet
+              // uses for TripScreen), not of this Expanded's own smaller
+              // constraints, so the floating pill's clearance has to be
+              // computed off that same full-screen fraction or it renders
+              // underneath the (opaque, painted-after-it) sheet.
+              floatingControlsBottom: MediaQuery.of(context).size.height * (_sheetHeightFraction ?? 0.40) + 16,
+              handle: const SheetHandle(),
+              onHandleDragUpdate: (details) {
+                final screenH = MediaQuery.of(context).size.height;
+                setState(() {
+                  _sheetHeightFraction =
+                      ((_sheetHeightFraction ?? 0.40) - details.delta.dy / screenH).clamp(0.22, 0.72);
+                });
+              },
+              heightFraction: _sheetHeightFraction ?? 0.40,
+              sheetRadius: 24,
+              sheetShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.12),
+                  blurRadius: 24,
+                  offset: const Offset(0, -8),
+                ),
+              ],
+              bodyPadding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+              sheetBody: _buildSheetContent(selected, status, selectedIndex, slots.length),
+            ),
+          ),
         ],
       ),
-      body: _loading
-          ? _buildLoadingState()
-          : _error != null
-              ? _buildError()
-              : _session == null
-                  ? RefreshIndicator(
-                      onRefresh: _load,
-                      color: JT.primary,
-                      child: ListView(
-                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
-                        children: [_buildStarter()],
-                      ),
-                    )
-                  : RefreshIndicator(
-                      onRefresh: _load,
-                      color: JT.primary,
-                      child: LayoutBuilder(
-                        builder: (context, constraints) {
-                          // Deliberate map:sheet split (map gets ~60%) rather
-                          // than the old incidental "whatever's left after a
-                          // fixed 350-380px sheet" sizing.
-                          final mapHeight = (constraints.maxHeight * 0.60)
-                              .clamp(200.0, constraints.maxHeight);
-                          final sheetMaxHeight =
-                              (constraints.maxHeight - mapHeight).clamp(180.0, 460.0);
-                          final focused = _focusedPassenger();
-                          final (maxSeats, occupied) = _seatCounts;
-                          final available = (maxSeats - occupied).clamp(0, maxSeats);
-                          return DraggableMapSheet(
-                            map: ListView(
-                              physics: const AlwaysScrollableScrollPhysics(),
-                              children: [
-                                SizedBox(
-                                  height: constraints.maxHeight,
-                                  child: _buildPoolMapHero(),
-                                ),
-                              ],
-                            ),
-                            floatingControls: _buildSafetyPill(),
-                            floatingControlsBottom: sheetMaxHeight + 16,
-                            maxHeight: sheetMaxHeight,
-                            sheetRadius: 24,
-                            sheetShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.12),
-                                blurRadius: 24,
-                                offset: const Offset(0, -8),
-                              ),
-                            ],
-                            bodyPadding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-                            wrapBodyInSafeArea: false,
-                            sheetBody: Column(
-                              children: [
-                                const SheetHandle(),
-                                const SizedBox(height: 12),
-                                PoolDynamicActionCard(
-                                  state: _poolCardStateFor(focused),
-                                  availableSeats: available,
-                                  maxSeats: maxSeats,
-                                  ending: _ending,
-                                  onEndSession: _ending ? null : _endSession,
-                                  focusedPassengerCard:
-                                      focused != null ? _buildPassengerCard(focused) : null,
-                                  stopsCount: _passengers.length,
-                                  onViewAllStops: _passengers.isEmpty ? null : _openStopsSheet,
-                                ),
-                              ],
-                            ),
-                          );
-                        },
+    );
+  }
+
+  // ── Compact header (active session) ───────────────────────────────────────
+  //
+  // Replaces the old AppBar + floating map card: back/title row, then a
+  // status row ("Carpool active" + occupancy chip + settings gear) that
+  // folds in what used to be a card floated over the map (accepting
+  // toggle, seat strip) plus the old bare refresh action — all still
+  // reachable, just relocated into _openPoolSettingsSheet so the map stays
+  // uncluttered.
+  Widget _buildActiveHeader() {
+    final (maxSeats, occupied) = _seatCounts;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 4, 16, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20, color: JT.textPrimary),
+                onPressed: () => Navigator.pop(context),
+              ),
+              Text('Local Pool', style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w700, color: JT.textPrimary)),
+              const Spacer(),
+              IconButton(
+                icon: const Icon(Icons.settings_outlined, color: JT.textSecondary),
+                onPressed: _openPoolSettingsSheet,
+              ),
+            ],
+          ),
+          Padding(
+            padding: const EdgeInsets.only(left: 48),
+            child: Row(
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: const BoxDecoration(color: JT.success, shape: BoxShape.circle),
+                ),
+                const SizedBox(width: 6),
+                Text('Carpool active',
+                    style: GoogleFonts.poppins(fontSize: 13.5, fontWeight: FontWeight.w600, color: JT.textPrimary)),
+                const SizedBox(width: 10),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: JT.bgSoft,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    '$maxSeats seats · $occupied occupied',
+                    style: GoogleFonts.poppins(fontSize: 11.5, fontWeight: FontWeight.w500, color: JT.textSecondary),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openPoolSettingsSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (sheetContext) => StatefulBuilder(builder: (sheetContext, setSheetState) {
+        // No active passenger at all — session can be ended safely. Mirrors
+        // the old PoolDynamicActionCard's gating (End Pool only ever showed
+        // for idleWaiting/allDropped, never mid-passenger).
+        final canEnd = _focusedPassenger() == null;
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(child: SheetHandle(color: JT.border)),
+                const SizedBox(height: 18),
+                Text('Local Pool Settings', style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w600, color: JT.textPrimary)),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Accepting new passengers', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13.5, color: JT.textPrimary)),
+                          const SizedBox(height: 2),
+                          Text('Pause to stop new match requests without ending your session.', style: GoogleFonts.poppins(fontSize: 11.5, color: JT.textSecondary)),
+                        ],
                       ),
                     ),
+                    _updatingAccepting
+                        ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: JT.primary))
+                        : Switch(
+                            value: _acceptingNewPassengers,
+                            activeThumbColor: JT.primary,
+                            onChanged: (v) async {
+                              await _toggleAccepting(v);
+                              setSheetState(() {});
+                            },
+                          ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.refresh_rounded, color: JT.primary),
+                  title: Text('Refresh', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, color: JT.textPrimary)),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _load();
+                  },
+                ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  enabled: canEnd && !_ending,
+                  leading: Icon(Icons.stop_circle_outlined, color: canEnd ? JT.error : JT.textSecondary.withValues(alpha: 0.4)),
+                  title: Text(
+                    _ending ? 'Ending...' : 'End Pool Session',
+                    style: GoogleFonts.poppins(
+                      fontWeight: FontWeight.w600,
+                      color: canEnd ? JT.error : JT.textSecondary.withValues(alpha: 0.4),
+                    ),
+                  ),
+                  subtitle: canEnd ? null : Text('Finish or drop the current passenger first', style: GoogleFonts.poppins(fontSize: 11.5, color: JT.textSecondary)),
+                  onTap: (!canEnd || _ending)
+                      ? null
+                      : () {
+                          Navigator.pop(sheetContext);
+                          _endSession();
+                        },
+                ),
+              ],
+            ),
+          ),
+        );
+      }),
     );
+  }
+
+  // ── Bottom sheet content (active session) ─────────────────────────────────
+
+  Widget _buildSheetContent(Map<String, dynamic>? selected, String status, int selectedIndex, int maxSeats) {
+    if (selected == null) {
+      return _buildIdleOrAllDroppedContent();
+    }
+    final requestId = selected['id']?.toString() ?? '';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _buildPassengerHeaderRow(selected, selectedIndex, maxSeats),
+        const SizedBox(height: 16),
+        _buildTripDetailsCard(selected),
+        const SizedBox(height: 12),
+        _buildDistanceEtaRow(selected, status),
+        const SizedBox(height: 18),
+        _buildPrimaryAction(selected, status, requestId),
+        if (_passengers.length > 1) ...[
+          const SizedBox(height: 12),
+          Center(
+            child: TextButton(
+              onPressed: _openStopsSheet,
+              child: Text(
+                'View All Stops (${_passengers.length})',
+                style: GoogleFonts.poppins(fontSize: 12.5, fontWeight: FontWeight.w600, color: JT.primary),
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildIdleOrAllDroppedContent() {
+    final allDropped = _passengers.isNotEmpty &&
+        _passengers.every((p) => (p as Map<String, dynamic>)['status']?.toString() == 'dropped');
+    final (maxSeats, occupied) = _seatCounts;
+    final available = (maxSeats - occupied).clamp(0, maxSeats);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: (allDropped ? JT.success : JT.primary).withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                allDropped ? Icons.task_alt_rounded : Icons.hourglass_top_rounded,
+                color: allDropped ? JT.success : JT.primary,
+                size: 20,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    allDropped ? 'All riders dropped' : 'Waiting for passengers',
+                    style: GoogleFonts.poppins(fontSize: 15, fontWeight: FontWeight.w600, color: JT.textPrimary),
+                  ),
+                  Text(
+                    allDropped
+                        ? 'Rate your passengers from View All Stops, then end the session.'
+                        : '$available of $maxSeats seats available. Matching is live.',
+                    style: GoogleFonts.poppins(fontSize: 11.5, color: JT.textSecondary),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        if (allDropped) ...[
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: _ending ? null : _endSession,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: JT.primary,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+              child: Text(_ending ? 'Ending...' : 'End Session', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.w600)),
+            ),
+          ),
+        ],
+        if (_passengers.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Center(
+            child: TextButton(
+              onPressed: _openStopsSheet,
+              child: Text(
+                'View All Stops (${_passengers.length})',
+                style: GoogleFonts.poppins(fontSize: 12.5, fontWeight: FontWeight.w600, color: JT.primary),
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildPassengerHeaderRow(Map<String, dynamic> p, int selectedIndex, int maxSeats) {
+    final name = p['customer_name']?.toString() ?? 'Passenger';
+    final fare = double.tryParse('${p['total_fare'] ?? 0}')?.toStringAsFixed(0) ?? '0';
+    final phone = p['customer_phone']?.toString() ?? '';
+    return Row(
+      children: [
+        Container(
+          width: 46,
+          height: 46,
+          decoration: BoxDecoration(gradient: JT.grad, borderRadius: BorderRadius.circular(14), boxShadow: JT.btnShadow),
+          child: Center(
+            child: Text(
+              name.isNotEmpty ? name[0].toUpperCase() : 'P',
+              style: const TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: GoogleFonts.poppins(fontSize: 15.5, fontWeight: FontWeight.w700, color: JT.textPrimary)),
+              Text('Seat ${selectedIndex + 1} of $maxSeats · ₹$fare', style: GoogleFonts.poppins(fontSize: 12, color: JT.textSecondary)),
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        _circleActionBtn(
+          icon: Icons.call_rounded,
+          color: JT.primary,
+          enabled: phone.isNotEmpty || (p['customer_id']?.toString().isNotEmpty ?? false),
+          onTap: () => _startPassengerCall(p),
+        ),
+        const SizedBox(width: 8),
+        _circleActionBtn(
+          icon: Icons.chat_bubble_outline_rounded,
+          color: JT.primary,
+          enabled: true,
+          onTap: () => _openPassengerChat(p),
+        ),
+        const SizedBox(width: 8),
+        _buildMoreMenuButton(p),
+      ],
+    );
+  }
+
+  Widget _circleActionBtn({
+    required IconData icon,
+    required Color color,
+    required bool enabled,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: enabled ? onTap : null,
+      child: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: enabled ? 0.10 : 0.05),
+          shape: BoxShape.circle,
+        ),
+        child: Icon(icon, color: enabled ? color : color.withValues(alpha: 0.35), size: 18),
+      ),
+    );
+  }
+
+  // "More" — folds in every secondary passenger action that used to sit in
+  // the old always-visible Chat/Call/Share/Block row plus the driver's only
+  // pre-pickup "remove this passenger" affordance. There's no dedicated
+  // driver-side "cancel booking" endpoint distinct from skip/no-show, so
+  // "Cancel Booking" reuses whichever of those already applies to the
+  // passenger's current status — same call, clearer label.
+  Widget _buildMoreMenuButton(Map<String, dynamic> p) {
+    final status = p['status']?.toString() ?? '';
+    final requestId = p['id']?.toString() ?? '';
+    final canCancel = status == 'pending_driver_accept' || status == 'matched';
+    final canBlock = p['customer_id']?.toString().isNotEmpty ?? false;
+    return PopupMenuButton<String>(
+      tooltip: '',
+      offset: const Offset(0, 46),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      onSelected: (value) {
+        switch (value) {
+          case 'cancel':
+            _confirmCancelBooking(p, status, requestId);
+            break;
+          case 'share':
+            _sharePassenger(p);
+            break;
+          case 'block':
+            _blockPassenger(p);
+            break;
+          case 'report':
+          case 'support':
+            Navigator.of(context).push(MaterialPageRoute(builder: (_) => const DriverSupportChatScreen()));
+            break;
+        }
+      },
+      itemBuilder: (context) => [
+        if (canCancel) PopupMenuItem(value: 'cancel', child: _menuRow(Icons.cancel_rounded, 'Cancel Booking', JT.error)),
+        PopupMenuItem(value: 'share', child: _menuRow(Icons.share_outlined, 'Share Trip', JT.primary)),
+        if (canBlock) PopupMenuItem(value: 'block', child: _menuRow(Icons.block_outlined, 'Block Passenger', JT.error)),
+        PopupMenuItem(value: 'report', child: _menuRow(Icons.report_gmailerrorred_rounded, 'Report Issue', JT.primary)),
+        PopupMenuItem(value: 'support', child: _menuRow(Icons.headset_mic_rounded, 'Support', JT.primary)),
+      ],
+      child: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(color: JT.textSecondary.withValues(alpha: 0.08), shape: BoxShape.circle),
+        child: const Icon(Icons.more_horiz_rounded, color: JT.textSecondary, size: 20),
+      ),
+    );
+  }
+
+  Widget _menuRow(IconData icon, String label, Color color) {
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      Icon(icon, color: color, size: 18),
+      const SizedBox(width: 10),
+      Text(label, style: GoogleFonts.poppins(color: color, fontWeight: FontWeight.w600, fontSize: 14)),
+    ]);
+  }
+
+  Future<void> _confirmCancelBooking(Map<String, dynamic> p, String status, String requestId) async {
+    if (requestId.isEmpty) return;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Cancel booking?'),
+        content: Text('This removes ${p['customer_name']?.toString() ?? 'the passenger'} from your route and frees their seat.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Keep')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: JT.error),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Cancel Booking'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    if (status == 'pending_driver_accept') {
+      await _skipPassenger(requestId);
+    } else {
+      await _markNoShow(requestId);
+    }
+  }
+
+  Widget _buildTripDetailsCard(Map<String, dynamic> p) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: JT.bgSoft,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _addressRow(Icons.my_location_rounded, JT.primary, 'Pickup', p['pickup_address']?.toString() ?? '-'),
+          Padding(
+            padding: const EdgeInsets.only(left: 11),
+            child: SizedBox(height: 16, child: VerticalDivider(width: 2, thickness: 2, color: JT.border)),
+          ),
+          _addressRow(Icons.location_on_rounded, JT.error, 'Drop', p['drop_address']?.toString() ?? '-'),
+        ],
+      ),
+    );
+  }
+
+  Widget _addressRow(IconData icon, Color color, String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 16, color: color),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: GoogleFonts.poppins(fontSize: 10.5, fontWeight: FontWeight.w600, color: JT.textSecondary)),
+              Text(value, maxLines: 2, overflow: TextOverflow.ellipsis, style: GoogleFonts.poppins(fontSize: 12.5, fontWeight: FontWeight.w500, color: JT.textPrimary)),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  String _formatDistLocal(double meters) {
+    if (meters < 1000) return '${meters.round()} m';
+    return '${(meters / 1000).toStringAsFixed(1)} km';
+  }
+
+  Widget _buildDistanceEtaRow(Map<String, dynamic> p, String status) {
+    final driverLat = _readDouble(_session?['current_lat']);
+    final driverLng = _readDouble(_session?['current_lng']);
+    final headingToDrop = status == 'picked_up';
+    final targetLat = _readDouble(headingToDrop ? (p['drop_lat'] ?? p['dropLat']) : (p['pickup_lat'] ?? p['pickupLat']));
+    final targetLng = _readDouble(headingToDrop ? (p['drop_lng'] ?? p['dropLng']) : (p['pickup_lng'] ?? p['pickupLng']));
+    double? meters;
+    if (driverLat != null && driverLng != null && targetLat != null && targetLng != null) {
+      meters = Geolocator.distanceBetween(driverLat, driverLng, targetLat, targetLng);
+    }
+    // Simple constant-speed estimate (~25 km/h city average) — this screen
+    // has no turn-by-turn routing/Directions integration, unlike TripScreen's
+    // nav mode, so this mirrors the same lightweight approximation used
+    // elsewhere rather than calling a new routing endpoint.
+    final etaMin = meters != null ? (meters / 1000 / 25 * 60).ceil().clamp(1, 999) : null;
+    final label = headingToDrop ? 'to drop' : 'to pickup';
+    return Row(
+      children: [
+        Expanded(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(color: JT.bgSoft, borderRadius: BorderRadius.circular(14)),
+            child: Row(children: [
+              const Icon(Icons.near_me_rounded, color: JT.primary, size: 16),
+              const SizedBox(width: 8),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(meters != null ? _formatDistLocal(meters) : '--', style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w700, color: JT.textPrimary)),
+                  Text(label, style: GoogleFonts.poppins(fontSize: 10.5, color: JT.textSecondary)),
+                ],
+              ),
+            ]),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(color: JT.bgSoft, borderRadius: BorderRadius.circular(14)),
+            child: Row(children: [
+              const Icon(Icons.schedule_rounded, color: JT.primary, size: 16),
+              const SizedBox(width: 8),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(etaMin != null ? '$etaMin min' : '--', style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w700, color: JT.textPrimary)),
+                  Text('estimated time', style: GoogleFonts.poppins(fontSize: 10.5, color: JT.textSecondary)),
+                ],
+              ),
+            ]),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPrimaryAction(Map<String, dynamic> p, String status, String requestId) {
+    switch (status) {
+      case 'pending_driver_accept':
+        return Row(
+          children: [
+            Expanded(
+              child: OutlinedButton(
+                onPressed: requestId.isEmpty ? null : () => _skipPassenger(requestId),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  side: const BorderSide(color: JT.border),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+                child: Text('Skip', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, color: JT.textPrimary)),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: ElevatedButton(
+                onPressed: requestId.isEmpty ? null : () => _acceptPassenger(requestId),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: JT.success,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+                child: Text('Accept', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.w600)),
+              ),
+            ),
+          ],
+        );
+      case 'matched':
+        return Column(
+          children: [
+            PoolSlideToConfirm(
+              key: ValueKey('arrive-$requestId'),
+              label: 'Slide to mark as arrived',
+              icon: Icons.arrow_forward_rounded,
+              color: JT.primary,
+              onConfirmed: () => _pickupPassenger(requestId),
+            ),
+            const SizedBox(height: 6),
+            Text('Arrive at pickup location once you reach', style: GoogleFonts.poppins(fontSize: 11, color: JT.textSecondary)),
+          ],
+        );
+      case 'picked_up':
+        return PoolSlideToConfirm(
+          key: ValueKey('drop-$requestId'),
+          label: 'Slide to drop passenger',
+          icon: Icons.flag_rounded,
+          color: JT.success,
+          onConfirmed: () => _dropPassenger(requestId),
+        );
+      default:
+        return const SizedBox.shrink();
+    }
   }
 
   // Small always-reachable floating safety pill, mirroring TripScreen's

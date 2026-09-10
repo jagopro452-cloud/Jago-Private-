@@ -2294,7 +2294,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
                 borderRadius: BorderRadius.circular(6),
               ),
               child: const Text(
-                'BUILD 1.0.103+103',
+                'BUILD 1.0.104+104',
                 style: TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w600),
               ),
             ),
