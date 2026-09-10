@@ -20,6 +20,16 @@ import '../../services/call_service.dart';
 import 'package:jago_shared_core/jago_shared_core.dart';
 import '../call/call_screen.dart';
 import '../profile/support_chat_screen.dart';
+import '../../widgets/tracking/tracking_header_bar.dart';
+import '../../widgets/tracking/search_pulse_icon.dart';
+import '../../widgets/tracking/search_live_pill.dart';
+import '../../widgets/tracking/search_stage_stepper.dart';
+import '../../widgets/tracking/searching_hero_card.dart';
+import '../../widgets/tracking/trip_status_header.dart';
+import '../../widgets/tracking/more_menu_button.dart';
+import '../../widgets/tracking/driver_matched_card.dart';
+import '../../widgets/tracking/route_progress_panel.dart';
+import '../../widgets/tracking/cancelled_trip_card.dart';
 
 import '../main_screen.dart';
 import 'trip_completion_screen.dart';
@@ -961,18 +971,12 @@ class _TrackingScreenState extends State<TrackingScreen>
   void _updateMapMarkers() async {
     final Set<Marker> newMarkers = {};
 
-    // 1. Pickup Location Marker (Search center) — shown as the booked vehicle
-    // type (e.g. bike) with the searching pulse ring, not a generic magnifier,
-    // so it reads as "this is what you're waiting for" rather than a search icon.
+    // 1. Pickup / customer's location — no marker pin is shown here anymore
+    // (the customer photo pin looked bad on the map), we just use it to
+    // center the camera.
     final pLat = double.tryParse(_trip?['pickupLat']?.toString() ?? '');
     final pLng = double.tryParse(_trip?['pickupLng']?.toString() ?? '');
     if (pLat != null && pLng != null) {
-      newMarkers.add(Marker(
-        markerId: const MarkerId('pickup'),
-        position: LatLng(pLat, pLng),
-        icon: await _getMarkerIcon(_resolveVehicleLabel(), isSearching: true),
-        anchor: const Offset(0.5, 0.5),
-      ));
       _center = LatLng(pLat, pLng);
       // The GoogleMap widget's initialCameraPosition only applies once, at
       // creation — updating _center afterward doesn't move an already-live
@@ -1112,14 +1116,31 @@ class _TrackingScreenState extends State<TrackingScreen>
     LatLng? previous,
     LatLng next,
   ) {
-    final incoming = double.tryParse(
-      data['heading']?.toString() ?? data['bearing']?.toString() ?? '',
-    );
-    if (incoming != null && incoming.isFinite && incoming != 0) {
-      return incoming;
+    // Bearing computed from the actual previous->next GPS movement is the
+    // source of truth — it always reflects genuine ground travel and can't
+    // be thrown off by device compass/mount orientation. The device/GPS-chip
+    // -reported heading field (data['heading']/data['bearing']) was found to
+    // be unreliable in practice: it made the bike icon consistently face
+    // ~180deg opposite the real direction of travel. It's now only used as a
+    // last resort for the very first fix of a trip, when there's no prior
+    // position yet to compute a real movement vector from.
+    if (previous != null &&
+        (previous.latitude != next.latitude ||
+            previous.longitude != next.longitude)) {
+      return _bearingBetween(previous, next);
     }
-    if (previous == null) return _driverHeading;
-    return _bearingBetween(previous, next);
+    if (previous == null) {
+      final incoming = double.tryParse(
+        data['heading']?.toString() ?? data['bearing']?.toString() ?? '',
+      );
+      if (incoming != null && incoming.isFinite && incoming != 0) {
+        return incoming;
+      }
+    }
+    // No real movement to derive a bearing from (first fix with no usable
+    // device heading, or a duplicate fix at the same point while stationary)
+    // — hold the last known facing instead of guessing.
+    return _driverHeading;
   }
 
   double _bearingBetween(LatLng from, LatLng to) {
@@ -1893,50 +1914,44 @@ class _TrackingScreenState extends State<TrackingScreen>
     final panelBg = JT.surface;
 
     return PopScope(
-      canPop: false, // Prevent all back gestures/buttons during active tracking
+      // Back always exits to Home rather than popping the raw Navigator
+      // stack — TrackingScreen is reachable via several different
+      // pushReplacement call sites (booking, FCM tap, socket auto-match,
+      // Home's active-trip banner), so "whatever route sits beneath this
+      // one" isn't reliably Home. Resetting to a fresh MainScreen sidesteps
+      // that entirely and, since MainScreen's HomeScreen re-fetches the
+      // active trip in initState, the Active Trip banner reflects current
+      // backend state immediately — whether the trip is still active or
+      // has since completed/been cancelled. The trip itself is never
+      // touched here; this is navigation only.
+      canPop: false,
       onPopInvokedWithResult: (didPop, result) {
         if (didPop) return;
-        if (_status == 'completed' || _status == 'cancelled') {
-          Navigator.of(context).pushAndRemoveUntil(
-              MaterialPageRoute(builder: (_) => const MainScreen()),
-              (_) => false);
-        } else {
-          // Show a hint that they can't leave
-          _showStatusBanner('Active trip in progress', JT.primary);
-        }
+        debugPrint('[ACTIVE_TRIP_TRACE] Tracking back pressed: status=$_status tripId=${widget.tripId} — resetting to fresh Home');
+        Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const MainScreen()),
+            (_) => false);
       },
       child: Scaffold(
         backgroundColor: const Color(0xFFF0F7FF),
         body: Column(
           children: [
             // Global Header
-            SafeArea(
-              bottom: false,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    GestureDetector(
-                      onTap: () {
-                        if (_status == 'completed' || _status == 'cancelled') {
-                          Navigator.of(context).pushAndRemoveUntil(
-                              MaterialPageRoute(builder: (_) => const MainScreen()),
-                              (_) => false);
-                        }
-                      },
-                      child: JT.logoBlue(height: 56),
-                    ),
-                    Row(
-                      children: [
-                        _headerAction(Icons.shield_rounded, 'Safety'),
-                        const SizedBox(width: 12),
-                        _headerAction(Icons.headset_mic_rounded, 'Support'),
-                      ],
-                    ),
-                  ],
-                ),
+            TrackingHeaderBar(
+              leading: GestureDetector(
+                onTap: () {
+                  if (_status == 'completed' || _status == 'cancelled') {
+                    Navigator.of(context).pushAndRemoveUntil(
+                        MaterialPageRoute(builder: (_) => const MainScreen()),
+                        (_) => false);
+                  }
+                },
+                child: JT.logoBlue(height: 56),
               ),
+              actions: [
+                _headerAction(Icons.shield_rounded, 'Safety'),
+                _headerAction(Icons.headset_mic_rounded, 'Support'),
+              ],
             ),
 
             Expanded(
@@ -2156,243 +2171,69 @@ class _TrackingScreenState extends State<TrackingScreen>
             _status == 'accepted' ||
             _status == 'arrived');
     final eta = _trip?['etaMinutes']?.toString() ?? '5';
+    final showLiveBadge =
+        _status != 'completed' && _status != 'cancelled' && _status != 'searching';
+    final showTrailingActions =
+        _status != 'searching' && _status != 'completed' && _status != 'cancelled';
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    statusInfo['label'] as String,
-                    style: GoogleFonts.poppins(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                      color: const Color(0xFF0F172A),
+    return TripStatusHeader(
+      statusLabel: statusInfo['label'] as String,
+      showLiveBadge: showLiveBadge,
+      otp: showOtp ? otp : null,
+      etaMinutes: eta,
+      trailingActions: showTrailingActions
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  onPressed: _shareRide,
+                  icon: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF1F5F9),
+                      shape: BoxShape.circle,
                     ),
-                  ),
-                  if (_status != 'completed' &&
-                      _status != 'cancelled' &&
-                      _status != 'searching')
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          'Live tracking',
-                          style: GoogleFonts.poppins(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                            color: const Color(0xFF64748B),
-                          ),
-                        ),
-                        Text(
-                          '  •  ',
-                          style: GoogleFonts.poppins(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                            color: const Color(0xFF64748B),
-                          ),
-                        ),
-                        Text(
-                          'Secure',
-                          style: GoogleFonts.poppins(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: JT.primary,
-                          ),
-                        ),
-                        const SizedBox(width: 3),
-                        Icon(Icons.verified_user_rounded,
-                            size: 12, color: JT.primary),
-                      ],
-                    ),
-                ],
-              ),
-            ),
-            if (_status != 'searching' &&
-                _status != 'completed' &&
-                _status != 'cancelled')
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    onPressed: _shareRide,
-                    icon: Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF1F5F9),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(Icons.share_rounded,
-                          size: 18, color: Color(0xFF475569)),
-                    ),
-                  ),
-                  _buildMoreMenuButton(driverName),
-                ],
-              ),
-          ],
-        ),
-        if (showOtp) ...[
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              // PIN Card
-              Expanded(
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: const Color(0xFFE2E8F0)),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF6366F1).withValues(alpha: 0.1),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(Icons.lock_rounded,
-                            color: Color(0xFF6366F1), size: 18),
-                      ),
-                      const SizedBox(width: 12),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('SECURE PIN',
-                              style: GoogleFonts.poppins(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  color: const Color(0xFF94A3B8))),
-                          Text(otp,
-                              style: GoogleFonts.poppins(
-                                  fontSize: 22,
-                                  fontWeight: FontWeight.w800,
-                                  color: const Color(0xFF0F172A),
-                                  letterSpacing: 1)),
-                        ],
-                      ),
-                    ],
+                    child: const Icon(Icons.share_rounded,
+                        size: 18, color: Color(0xFF475569)),
                   ),
                 ),
-              ),
-              const SizedBox(width: 12),
-              // Wait Time Card
-              Expanded(
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: const Color(0xFFE2E8F0)),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF10B981).withValues(alpha: 0.1),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(Icons.timer_rounded,
-                            color: Color(0xFF10B981), size: 18),
-                      ),
-                      const SizedBox(width: 12),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('PILOT ARRIVES IN',
-                              style: GoogleFonts.poppins(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  color: const Color(0xFF94A3B8))),
-                          Text('$eta MIN',
-                              style: GoogleFonts.poppins(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.w800,
-                                  color: const Color(0xFF0F172A))),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ],
+                _buildMoreMenuButton(driverName),
+              ],
+            )
+          : null,
     );
   }
 
   Widget _buildMoreMenuButton(String? driverName) {
     final canCancel =
         _status != 'arrived' && _status != 'in_progress' && _status != 'on_the_way';
-    return PopupMenuButton<String>(
-      tooltip: '',
-      padding: EdgeInsets.zero,
-      offset: const Offset(0, 44),
-      elevation: 6,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      icon: Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: const Color(0xFFF1F5F9),
-          shape: BoxShape.circle,
-        ),
-        child: const Icon(Icons.more_vert_rounded, size: 18, color: Color(0xFF475569)),
-      ),
-      onSelected: (value) {
-        switch (value) {
-          case 'cancel':
-            _showCancelDialog();
-            break;
-          case 'contact':
+    return TripMoreMenuButton(
+      actions: [
+        if (canCancel)
+          MoreMenuAction(
+            icon: Icons.cancel_rounded,
+            label: 'Cancel Ride',
+            color: const Color(0xFFDC2626),
+            onTap: _showCancelDialog,
+          ),
+        MoreMenuAction(
+          icon: Icons.headset_mic_rounded,
+          iconColor: const Color(0xFF475569),
+          label: 'Contact Pilot',
+          color: const Color(0xFF334155),
+          onTap: () {
             if (driverName != null) _startInAppCall(driverName);
-            break;
-          case 'help':
+          },
+        ),
+        MoreMenuAction(
+          icon: Icons.help_outline_rounded,
+          iconColor: const Color(0xFF475569),
+          label: 'Help & Support',
+          color: const Color(0xFF334155),
+          onTap: () {
             Navigator.push(context,
                 MaterialPageRoute(builder: (_) => const SupportChatScreen()));
-            break;
-        }
-      },
-      itemBuilder: (context) => [
-        if (canCancel)
-          PopupMenuItem(
-            value: 'cancel',
-            child: Row(children: [
-              const Icon(Icons.cancel_rounded, size: 18, color: Color(0xFFDC2626)),
-              const SizedBox(width: 10),
-              Text('Cancel Ride',
-                  style: GoogleFonts.poppins(
-                      fontSize: 13, fontWeight: FontWeight.w500, color: const Color(0xFFDC2626))),
-            ]),
-          ),
-        PopupMenuItem(
-          value: 'contact',
-          child: Row(children: [
-            const Icon(Icons.headset_mic_rounded, size: 18, color: Color(0xFF475569)),
-            const SizedBox(width: 10),
-            Text('Contact Pilot',
-                style: GoogleFonts.poppins(
-                    fontSize: 13, fontWeight: FontWeight.w500, color: const Color(0xFF334155))),
-          ]),
-        ),
-        PopupMenuItem(
-          value: 'help',
-          child: Row(children: [
-            const Icon(Icons.help_outline_rounded, size: 18, color: Color(0xFF475569)),
-            const SizedBox(width: 10),
-            Text('Help & Support',
-                style: GoogleFonts.poppins(
-                    fontSize: 13, fontWeight: FontWeight.w500, color: const Color(0xFF334155))),
-          ]),
+          },
         ),
       ],
     );
@@ -2416,155 +2257,14 @@ class _TrackingScreenState extends State<TrackingScreen>
     required String vehicleModel,
     required String? phone,
   }) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: JT.primary.withValues(alpha: 0.08), width: 1),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withValues(alpha: 0.03),
-              blurRadius: 10,
-              offset: const Offset(0, 4)),
-        ],
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: JT.border,
-              shape: BoxShape.circle,
-              image: photo != null && photo.isNotEmpty
-                  ? DecorationImage(
-                      image: NetworkImage(photo), fit: BoxFit.cover)
-                  : null,
-            ),
-            child: (photo == null || photo.isEmpty)
-                ? const Icon(Icons.person_rounded,
-                    color: Colors.white, size: 26)
-                : null,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        name,
-                        style: GoogleFonts.poppins(
-                          fontSize: 14.5,
-                          fontWeight: FontWeight.w600,
-                          color: JT.textPrimary,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: Colors.green[50],
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.star_rounded,
-                              color: Colors.green, size: 11),
-                          const SizedBox(width: 2),
-                          Text(
-                            rating?.toString() ?? '4.8',
-                            style: const TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.green),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 5),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF1F5F9),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: JT.border, width: 1),
-                  ),
-                  child: Text(
-                    vehicleNum.isNotEmpty ? vehicleNum.toUpperCase() : '...',
-                    style: GoogleFonts.poppins(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: JT.textPrimary,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  vehicleModel.isNotEmpty ? vehicleModel : 'Jago Pilot',
-                  style: GoogleFonts.poppins(
-                      fontSize: 11, color: JT.textSecondary),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Container(
-                width: 38,
-                height: 38,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF8FAFF),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: JT.primary.withValues(alpha: 0.12)),
-                ),
-                child: Icon(_iconForVehicleLabel(_resolveVehicleLabel()),
-                    color: JT.primary, size: 20),
-              ),
-              const SizedBox(height: 5),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                decoration: BoxDecoration(
-                  color: JT.primary,
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.check_rounded,
-                        color: Colors.white, size: 10),
-                    const SizedBox(width: 2),
-                    Text('Verified',
-                        style: GoogleFonts.poppins(
-                            fontSize: 8.5,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white)),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
+    return DriverMatchedCard(
+      name: name,
+      rating: rating,
+      photo: photo,
+      vehicleNum: vehicleNum,
+      vehicleModel: vehicleModel,
+      phone: phone,
+      vehicleIcon: _iconForVehicleLabel(_resolveVehicleLabel()),
     );
   }
 
@@ -2584,267 +2284,26 @@ class _TrackingScreenState extends State<TrackingScreen>
     final duration = trip?['estimatedDurationMinutes'] ?? trip?['estimated_duration'] ?? trip?['etaMinutes'];
     final eta = trip?['etaMinutes']?.toString() ?? '2';
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildSearchPulseIcon(),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Finding you the best ride',
-                    style: GoogleFonts.poppins(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                      color: const Color(0xFF0F172A),
-                      height: 1.15,
-                      letterSpacing: -0.2,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    "We're finding nearby riders and will match you soon.",
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: GoogleFonts.poppins(
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w400,
-                      color: const Color(0xFF64748B),
-                      height: 1.25,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 6),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  eta,
-                  style: GoogleFonts.poppins(
-                    fontSize: 17,
-                    fontWeight: FontWeight.w800,
-                    color: const Color(0xFF2C95F1),
-                    height: 1.0,
-                  ),
-                ),
-                Text(
-                  'min away',
-                  style: GoogleFonts.poppins(
-                    fontSize: 9,
-                    fontWeight: FontWeight.w500,
-                    color: const Color(0xFF64748B),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        _buildSearchLivePill(),
-        const SizedBox(height: 8),
-        _buildSearchStages(),
-        const SizedBox(height: 8),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(child: _buildEstimatedFareCard(fareVal, dist, duration)),
-            const SizedBox(width: 8),
-            Expanded(child: _buildAddFareAmountCard()),
-          ],
-        ),
-        const SizedBox(height: 10),
-        _buildSearchCancelButton(),
-        const SizedBox(height: 6),
-        _buildSafetyFooter(),
-      ],
-    );
-  }
-
-  // Pulsing radar-style icon that signals an active, ongoing search.
-  Widget _buildSearchPulseIcon() {
-    return SizedBox(
-      width: 36,
-      height: 36,
-      child: AnimatedBuilder(
-        animation: _pulseCtrl,
-        builder: (context, child) {
-          final t = _pulseCtrl.value;
-          return Stack(
-            alignment: Alignment.center,
-            children: [
-              Transform.scale(
-                scale: 1 + t * 0.6,
-                child: Opacity(
-                  opacity: (1 - t).clamp(0.0, 1.0) * 0.35,
-                  child: Container(
-                    width: 32,
-                    height: 32,
-                    decoration: const BoxDecoration(
-                      color: Color(0xFF2C95F1),
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                ),
-              ),
-              child!,
-            ],
-          );
-        },
-        child: Container(
-          width: 32,
-          height: 32,
-          decoration: BoxDecoration(
-            color: const Color(0xFF2C95F1).withValues(alpha: 0.12),
-            shape: BoxShape.circle,
-          ),
-          child: const Icon(Icons.search_rounded, color: Color(0xFF2C95F1), size: 16),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSearchLivePill() {
-    return Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.3)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              AnimatedBuilder(
-                animation: _pulseCtrl,
-                builder: (context, child) => Container(
-                  width: 6,
-                  height: 6,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF10B981)
-                        .withValues(alpha: 0.5 + _pulseCtrl.value * 0.5),
-                    shape: BoxShape.circle,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 5),
-              Text(
-                'Live',
-                style: GoogleFonts.poppins(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  color: const Color(0xFF10B981),
-                ),
-              ),
-              const SizedBox(width: 5),
-              Text('|', style: GoogleFonts.poppins(fontSize: 11, color: const Color(0xFFCBD5E1))),
-              const SizedBox(width: 5),
-              Text(
-                '${_nearbyDrivers.length} pilots nearby',
-                style: GoogleFonts.poppins(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w500,
-                  color: const Color(0xFF64748B),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  // Animated 3-step tracker: Searching -> Verifying -> Matching.
-  // Cosmetic only — loops continuously while the real dispatch search runs.
-  Widget _buildSearchStages() {
     final steps = <(IconData, String)>[
       (Icons.groups_rounded, 'Searching\nnearby riders'),
       (Icons.verified_user_rounded, 'Verifying\navailability'),
       (Icons.task_alt_rounded, 'Matching\nbest ride'),
     ];
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFF0F1F3)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          for (int i = 0; i < steps.length; i++) ...[
-            _buildSearchStageStep(
-              steps[i].$1,
-              steps[i].$2,
-              active: i == _searchStage,
-              done: i < _searchStage,
-            ),
-            if (i != steps.length - 1)
-              Expanded(child: _buildSearchStageConnector(i < _searchStage)),
-          ],
-        ],
-      ),
-    );
-  }
 
-  Widget _buildSearchStageStep(IconData icon, String label,
-      {required bool active, required bool done}) {
-    final color = done
-        ? const Color(0xFF10B981)
-        : (active ? const Color(0xFF2C95F1) : const Color(0xFF9CA3AF));
-    final bg = done
-        ? const Color(0xFF10B981).withValues(alpha: 0.12)
-        : (active
-            ? const Color(0xFF2C95F1).withValues(alpha: 0.12)
-            : const Color(0xFFE5E7EB).withValues(alpha: 0.5));
-    return SizedBox(
-      width: 58,
-      child: Column(
-        children: [
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 300),
-            width: active ? 28 : 23,
-            height: active ? 28 : 23,
-            decoration: BoxDecoration(
-              color: bg,
-              shape: BoxShape.circle,
-              border: active ? Border.all(color: color, width: 1.3) : null,
-            ),
-            child: Icon(done ? Icons.check_rounded : icon,
-                size: active ? 14 : 11, color: color),
-          ),
-          const SizedBox(height: 5),
-          Text(
-            label,
-            textAlign: TextAlign.center,
-            style: GoogleFonts.poppins(
-              fontSize: 8.5,
-              fontWeight: active ? FontWeight.w600 : FontWeight.w500,
-              color: active || done ? const Color(0xFF334155) : const Color(0xFF9CA3AF),
-              height: 1.15,
-            ),
-          ),
-        ],
+    return SearchingHeroCard(
+      pulseIcon: SearchPulseIcon(controller: _pulseCtrl),
+      title: 'Finding you the best ride',
+      subtitle: "We're finding nearby riders and will match you soon.",
+      etaValue: eta,
+      livePill: SearchLivePill(
+        controller: _pulseCtrl,
+        nearbyLabel: '${_nearbyDrivers.length} pilots nearby',
       ),
-    );
-  }
-
-  Widget _buildSearchStageConnector(bool done) {
-    return Container(
-      margin: const EdgeInsets.only(top: 11, left: 2, right: 2),
-      height: 2,
-      decoration: BoxDecoration(
-        color: done ? const Color(0xFF10B981).withValues(alpha: 0.5) : const Color(0xFFE5E7EB),
-        borderRadius: BorderRadius.circular(1),
-      ),
+      stageStepper: SearchStageStepper(steps: steps, activeStage: _searchStage),
+      primaryInfoCard: _buildEstimatedFareCard(fareVal, dist, duration),
+      secondaryInfoCard: _buildAddFareAmountCard(),
+      cancelButton: _buildSearchCancelButton(),
+      footer: _buildSafetyFooter(),
     );
   }
 
@@ -3345,110 +2804,12 @@ class _TrackingScreenState extends State<TrackingScreen>
         ? "We couldn't find any riders for you. Please try again in a few moments."
         : (reason.isNotEmpty ? reason : 'This trip was cancelled.');
 
-    return Column(
-      children: [
-        SizedBox(
-          width: 84,
-          height: 84,
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              Container(
-                width: 62,
-                height: 62,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: const Color(0xFF2C95F1).withValues(alpha: 0.06),
-                  border: Border.all(color: const Color(0xFF2C95F1), width: 4.5),
-                ),
-                child: const Icon(Icons.sentiment_dissatisfied_rounded,
-                    size: 30, color: Color(0xFF2C95F1)),
-              ),
-              Positioned(
-                right: 2,
-                bottom: 4,
-                child: Transform.rotate(
-                  angle: 0.78,
-                  child: Container(
-                    width: 20,
-                    height: 6,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF2C95F1),
-                      borderRadius: BorderRadius.circular(3),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        Text(
-          title,
-          textAlign: TextAlign.center,
-          style: GoogleFonts.poppins(
-              fontSize: 18, fontWeight: FontWeight.w700, color: const Color(0xFF0F172A)),
-        ),
-        const SizedBox(height: 6),
-        Text(
-          subtitle,
-          textAlign: TextAlign.center,
-          style: GoogleFonts.poppins(
-              fontSize: 12.5, color: const Color(0xFF64748B), height: 1.4),
-        ),
-        const SizedBox(height: 18),
-        SizedBox(
-          width: double.infinity,
-          child: ElevatedButton.icon(
-            onPressed: () => Navigator.pop(context),
-            icon: const Icon(Icons.refresh_rounded, size: 18, color: Colors.white),
-            label: Text('Try Again',
-                style: GoogleFonts.poppins(
-                    fontSize: 15, fontWeight: FontWeight.w600, color: Colors.white)),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF2C95F1),
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: const Color(0xFF2C95F1).withValues(alpha: 0.06),
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Icon(Icons.lightbulb_outline_rounded, size: 18, color: Color(0xFF2C95F1)),
-              const SizedBox(width: 8),
-              Expanded(
-                child: RichText(
-                  text: TextSpan(
-                    style: GoogleFonts.poppins(
-                        fontSize: 11.5, color: const Color(0xFF475569), height: 1.4),
-                    children: [
-                      TextSpan(
-                        text: 'Tip: ',
-                        style: TextStyle(
-                            fontWeight: FontWeight.w700, color: const Color(0xFF1E293B)),
-                      ),
-                      const TextSpan(
-                          text:
-                              'You can try again after some time, or check different ride options.'),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 14),
-        _buildSafetyFooter(),
-      ],
+    return CancelledTripCard(
+      title: title,
+      subtitle: subtitle,
+      primaryButtonLabel: 'Try Again',
+      onPrimaryButtonTap: () => Navigator.pop(context),
+      footer: _buildSafetyFooter(),
     );
   }
 
@@ -3695,82 +3056,30 @@ class _TrackingScreenState extends State<TrackingScreen>
         'Destination';
     final dist = trip['estimatedDistance'] ?? trip['estimated_distance'];
 
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFF),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.blue.withValues(alpha: 0.1)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                    color: Colors.blue.withValues(alpha: 0.12),
-                    shape: BoxShape.circle),
-                child: const Icon(Icons.navigation_rounded,
-                    color: Colors.blue, size: 20),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Heading to',
-                        style: GoogleFonts.poppins(
-                            fontSize: 12, color: JT.textSecondary)),
-                    Text(dest,
-                        style: GoogleFonts.poppins(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w600,
-                            color: JT.textPrimary),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis),
-                  ],
-                ),
-              ),
-              if (dist != null)
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: JT.border)),
-                  child: Text('${_formatKm(dist)} km',
-                      style: GoogleFonts.poppins(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: JT.primary)),
-                ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          const Divider(height: 1),
-          const SizedBox(height: 16),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  _buildLiveDot(),
-                  const SizedBox(width: 8),
-                  Text('Trip is in progress',
-                      style: GoogleFonts.poppins(
-                          fontSize: 12,
-                          color: Colors.green,
-                          fontWeight: FontWeight.w600)),
-                ],
-              ),
-              const Icon(Icons.security_rounded, color: Colors.blue, size: 18),
-            ],
-          ),
-        ],
-      ),
+    return RouteProgressPanel(
+      icon: Icons.navigation_rounded,
+      accentColor: Colors.blue,
+      label: 'Heading to',
+      content: Text(dest,
+          style: GoogleFonts.poppins(
+              fontSize: 15, fontWeight: FontWeight.w600, color: JT.textPrimary),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis),
+      distanceBadge: dist != null
+          ? Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: JT.border)),
+              child: Text('${_formatKm(dist)} km',
+                  style: GoogleFonts.poppins(
+                      fontSize: 13, fontWeight: FontWeight.w700, color: JT.primary)),
+            )
+          : null,
+      showLiveDot: true,
+      liveDotLabel: 'Trip is in progress',
+      trailingIcon: Icons.security_rounded,
     );
   }
 
@@ -3800,77 +3109,37 @@ class _TrackingScreenState extends State<TrackingScreen>
           _driverLatLng!.latitude, _driverLatLng!.longitude, pLat, pLng);
     }
 
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFF),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: JT.primary.withValues(alpha: 0.1)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-                color: JT.primary.withValues(alpha: 0.12),
-                shape: BoxShape.circle),
-            child: const Icon(Icons.navigation_rounded,
-                color: JT.primary, size: 20),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Heading to you',
-                    style: GoogleFonts.poppins(
-                        fontSize: 12, color: JT.textSecondary)),
-                const SizedBox(height: 2),
-                Text.rich(
-                  TextSpan(
-                    style: GoogleFonts.poppins(
-                        fontSize: 14.5,
-                        fontWeight: FontWeight.w600,
-                        color: JT.textPrimary),
-                    children: [
-                      const TextSpan(text: 'Arriving in '),
-                      TextSpan(
-                        text: '$eta min',
-                        style: const TextStyle(
-                            color: JT.primary, fontWeight: FontWeight.w700),
-                      ),
-                      if (distKm != null)
-                        TextSpan(text: ' (${_formatDistanceAway(distKm)})'),
-                    ],
-                  ),
-                ),
-              ],
+    return RouteProgressPanel(
+      icon: Icons.navigation_rounded,
+      accentColor: JT.primary,
+      label: 'Heading to you',
+      content: Text.rich(
+        TextSpan(
+          style: GoogleFonts.poppins(
+              fontSize: 14.5, fontWeight: FontWeight.w600, color: JT.textPrimary),
+          children: [
+            const TextSpan(text: 'Arriving in '),
+            TextSpan(
+              text: '$eta min',
+              style: const TextStyle(color: JT.primary, fontWeight: FontWeight.w700),
             ),
-          ),
-        ],
+            if (distKm != null) TextSpan(text: ' (${_formatDistanceAway(distKm)})'),
+          ],
+        ),
       ),
-    );
-  }
-
-  Widget _buildLiveDot() {
-    return Container(
-      width: 8,
-      height: 8,
-      decoration:
-          const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
     );
   }
 
   Widget _headerAction(IconData icon, String label) {
     return GestureDetector(
       onTap: () {
-        if (_status == 'completed' || _status == 'cancelled') {
-          Navigator.of(context).pushAndRemoveUntil(
-              MaterialPageRoute(builder: (_) => const MainScreen()),
-              (_) => false);
-        } else {
-          _showStatusBanner('Active trip in progress', JT.primary);
-        }
+        // Home is always reachable — the Active Trip banner on Home is what
+        // keeps this trip visible/resumable, so there's no reason to trap
+        // the customer here anymore (see the PopScope handler above for the
+        // same reasoning).
+        Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const MainScreen()),
+            (_) => false);
       },
       child: Container(
         width: 60,
@@ -3929,13 +3198,13 @@ class _TrackingScreenState extends State<TrackingScreen>
     bool isSelected = index == 0;
     return GestureDetector(
       onTap: () {
-        if (_status == 'completed' || _status == 'cancelled') {
-          Navigator.of(context).pushAndRemoveUntil(
-              MaterialPageRoute(builder: (_) => const MainScreen()),
-              (_) => false);
-        } else {
-          _showStatusBanner('Active trip in progress', JT.primary);
-        }
+        // Home is always reachable — the Active Trip banner on Home is what
+        // keeps this trip visible/resumable, so there's no reason to trap
+        // the customer here anymore (see the PopScope handler above for the
+        // same reasoning).
+        Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const MainScreen()),
+            (_) => false);
       },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 300),

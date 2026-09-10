@@ -50,6 +50,10 @@ function VerifyModal({ driver, open, onClose }: { driver: any; open: boolean; on
       toast({ title: vars.status === "approved" ? "✅ Driver approved!" : "❌ Driver rejected" });
       onClose();
     },
+    // Without this, a blocked approval (e.g. the driver hasn't finished
+    // vehicle registration) failed silently — no toast, modal stayed open
+    // with no explanation, so it looked like the button just didn't work.
+    onError: (e: any) => toast({ title: "Could not update driver status", description: e.message, variant: "destructive" }),
   });
 
   const handleDocChange = (field: string, val: string) => {

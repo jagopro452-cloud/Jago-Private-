@@ -1,10 +1,14 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 import '../../src/core/config/api_config.dart';
 import '../../config/jago_theme.dart';
 import '../../services/auth_service.dart';
+import '../../widgets/booking/address_row.dart';
+import '../../widgets/booking/booking_map_shell.dart';
+import '../../widgets/booking/inline_info_card.dart';
 import '../tracking/local_pool_status_screen.dart';
 
 /// Car Share step 2: 1 or 2 members, then confirm. The customer never
@@ -12,6 +16,12 @@ import '../tracking/local_pool_status_screen.dart';
 /// vehicle once booked. Pickup/drop are already picked (via
 /// PremiumLocationScreen's onLocationsConfirmed hand-off) by the time this
 /// screen opens.
+///
+/// Rendered on [BookingMapShell] — the same map + bottom-sheet shell used by
+/// Bike/Auto/Cab/Premium's BookingScreen — as a single-step (`totalSteps: 1`)
+/// flow, so the layout, cards, and CTA button match that flow exactly. Every
+/// API call, seat-limit check, and navigation target below is unchanged from
+/// before this UI rebuild.
 class CarShareOptionsScreen extends StatefulWidget {
   final String pickupAddress;
   final double pickupLat;
@@ -48,10 +58,35 @@ class _CarShareOptionsScreenState extends State<CarShareOptionsScreen> {
   double _farePerSeat = 0;
   double _totalFare = 0;
 
+  GoogleMapController? _mapController;
+
+  LatLng get _pickupLatLng => LatLng(widget.pickupLat, widget.pickupLng);
+  LatLng get _dropLatLng => LatLng(widget.dropLat, widget.dropLng);
+
   @override
   void initState() {
     super.initState();
     _fetchEstimate();
+  }
+
+  void _fitMapToRoute() {
+    final controller = _mapController;
+    if (controller == null) return;
+    Future.delayed(const Duration(milliseconds: 300), () {
+      final minLat = _pickupLatLng.latitude < _dropLatLng.latitude ? _pickupLatLng.latitude : _dropLatLng.latitude;
+      final maxLat = _pickupLatLng.latitude > _dropLatLng.latitude ? _pickupLatLng.latitude : _dropLatLng.latitude;
+      final minLng = _pickupLatLng.longitude < _dropLatLng.longitude ? _pickupLatLng.longitude : _dropLatLng.longitude;
+      final maxLng = _pickupLatLng.longitude > _dropLatLng.longitude ? _pickupLatLng.longitude : _dropLatLng.longitude;
+      try {
+        controller.animateCamera(CameraUpdate.newLatLngBounds(
+          LatLngBounds(
+            southwest: LatLng(minLat, minLng),
+            northeast: LatLng(maxLat, maxLng),
+          ),
+          90,
+        ));
+      } catch (_) {}
+    });
   }
 
   Future<void> _fetchEstimate() async {
@@ -159,49 +194,69 @@ class _CarShareOptionsScreenState extends State<CarShareOptionsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final screenHeight = MediaQuery.of(context).size.height;
+    final canConfirm = !_booking && !_loading && _hasEligibleVehicle && _error == null;
+
     return Scaffold(
-      backgroundColor: JT.bgSoft,
-      appBar: AppBar(
-        backgroundColor: JT.bg,
-        elevation: 0,
-        foregroundColor: JT.textPrimary,
-        title: Text('Car Share', style: GoogleFonts.poppins(fontWeight: FontWeight.w700, color: JT.textPrimary)),
-      ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.all(16),
-                children: [
-                  _buildTripSummary(),
-                  const SizedBox(height: 20),
-                  _buildMemberSelector(),
-                  const SizedBox(height: 20),
-                  if (_loading)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 40),
-                      child: Center(child: CircularProgressIndicator(color: JT.primary)),
-                    )
-                  else if (_error != null)
-                    _buildErrorState()
-                  else if (!_hasEligibleVehicle)
-                    _buildEmptyState()
-                  else
-                    _buildFareCard(),
-                ],
-              ),
-            ),
-            _buildConfirmBar(),
-          ],
+      backgroundColor: JT.bg,
+      body: BookingMapShell(
+        pickupLatLng: _pickupLatLng,
+        markers: {
+          Marker(
+            markerId: const MarkerId('pickup'),
+            position: _pickupLatLng,
+            icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+          ),
+          Marker(
+            markerId: const MarkerId('destination'),
+            position: _dropLatLng,
+            icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+          ),
+        },
+        polylines: const {},
+        onMapCreated: (c) {
+          _mapController = c;
+          _fitMapToRoute();
+        },
+        onRecenter: () => _fitMapToRoute(),
+        title: 'Car Share',
+        subtitle: 'JAGO matches you with a nearby pool vehicle.',
+        totalSteps: 1,
+        currentStep: 0,
+        sheetMaxHeight: screenHeight * 0.62,
+        stepBody: SingleChildScrollView(
+          key: const ValueKey('carShare'),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildTripSummary(),
+              const SizedBox(height: 16),
+              _buildMemberSelector(),
+              const SizedBox(height: 16),
+              if (_loading)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 40),
+                  child: Center(child: CircularProgressIndicator(color: JT.primary)),
+                )
+              else if (_error != null)
+                _buildErrorState()
+              else if (!_hasEligibleVehicle)
+                _buildEmptyState()
+              else
+                _buildFareCard(),
+            ],
+          ),
         ),
+        stepBodyKey: 'carShare',
+        ctaLabel: 'Confirm Car Share',
+        onCtaPressed: canConfirm ? _confirm : null,
+        ctaLoading: _booking,
       ),
     );
   }
 
   Widget _buildTripSummary() {
     return Container(
-      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: JT.surface,
         borderRadius: BorderRadius.circular(16),
@@ -209,42 +264,17 @@ class _CarShareOptionsScreenState extends State<CarShareOptionsScreen> {
         boxShadow: JT.cardShadow,
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _tripRow(Icons.trip_origin, JT.success, 'Pickup', widget.pickupAddress),
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 6, horizontal: 9),
-            child: SizedBox(height: 14, child: VerticalDivider(color: JT.border, thickness: 1)),
-          ),
-          _tripRow(Icons.location_on, JT.error, 'Drop', widget.dropAddress),
+          AddressRow(icon: Icons.circle_rounded, color: JT.primary, text: widget.pickupAddress, isPickup: true),
+          const Divider(height: 1, indent: 52, endIndent: 16),
+          AddressRow(icon: Icons.location_on_rounded, color: JT.error, text: widget.dropAddress, isPickup: false),
         ],
       ),
     );
   }
 
-  Widget _tripRow(IconData icon, Color color, String label, String value) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, size: 18, color: color),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(label, style: const TextStyle(fontSize: 11, color: JT.textTertiary)),
-              Text(value,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w600, color: JT.textPrimary)),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
   Widget _buildMemberSelector() {
+    const Color selColor = Color(0xFF7C3AED); // matches booking_screen's selected vehicle-tile accent
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -259,77 +289,98 @@ class _CarShareOptionsScreenState extends State<CarShareOptionsScreen> {
           Text('How many members are travelling?',
               style: GoogleFonts.poppins(fontSize: 15, fontWeight: FontWeight.w700, color: JT.textPrimary)),
           const SizedBox(height: 12),
-          Row(
-            children: List.generate(_maxSeats, (i) => i + 1).map((n) {
-              final selected = _seats == n;
-              return Expanded(
-                child: GestureDetector(
-                  onTap: _loading ? null : () {
-                    if (n == _seats) return;
-                    setState(() => _seats = n);
-                    _fetchEstimate();
-                  },
-                  child: Container(
-                    margin: EdgeInsets.only(right: n == 1 ? 8 : 0, left: n == 2 ? 8 : 0),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    decoration: BoxDecoration(
-                      color: selected ? JT.primary : JT.bgSoft,
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: selected ? JT.primary : JT.border),
+          ...List.generate(_maxSeats, (i) => i + 1).map((n) {
+            final selected = _seats == n;
+            return Padding(
+              padding: EdgeInsets.only(bottom: n == _maxSeats ? 0 : 12),
+              child: GestureDetector(
+                onTap: _loading
+                    ? null
+                    : () {
+                        if (n == _seats) return;
+                        setState(() => _seats = n);
+                        _fetchEstimate();
+                      },
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 300),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: selected ? selColor.withValues(alpha: 0.06) : Colors.white,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: selected ? selColor.withValues(alpha: 0.3) : JT.border,
+                      width: selected ? 2 : 1,
                     ),
-                    child: Column(
-                      children: [
-                        Text('$n',
+                    boxShadow: selected
+                        ? [BoxShadow(color: selColor.withValues(alpha: 0.08), blurRadius: 12, offset: const Offset(0, 4))]
+                        : [BoxShadow(color: Colors.black.withValues(alpha: 0.02), blurRadius: 5, offset: const Offset(0, 2))],
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 70,
+                        height: 70,
+                        decoration: BoxDecoration(
+                          color: selected ? selColor.withValues(alpha: 0.1) : const Color(0xFFF9FAFB),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Center(
+                          child: Text(
+                            '$n',
                             style: GoogleFonts.poppins(
-                                fontSize: 20, fontWeight: FontWeight.w800, color: selected ? Colors.white : JT.textPrimary)),
-                        const SizedBox(height: 2),
-                        Text(n == 1 ? 'Person' : 'People',
-                            style: GoogleFonts.poppins(
-                                fontSize: 11, color: selected ? Colors.white.withValues(alpha: 0.9) : JT.textSecondary)),
+                              fontSize: 28,
+                              fontWeight: FontWeight.w800,
+                              color: selected ? selColor : const Color(0xFF1E293B),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              n == 1 ? '1 Person' : '2 People',
+                              style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w700, color: const Color(0xFF1E293B)),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              n == 1 ? 'Just you' : 'You and a companion',
+                              style: GoogleFonts.poppins(
+                                color: selected ? selColor : const Color(0xFF64748B),
+                                fontSize: 13,
+                                fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (selected) ...[
+                        const SizedBox(width: 10),
+                        Container(
+                          width: 26,
+                          height: 26,
+                          decoration: const BoxDecoration(color: Color(0xFF7C3AED), shape: BoxShape.circle),
+                          child: const Icon(Icons.check_rounded, color: Colors.white, size: 16),
+                        ),
                       ],
-                    ),
+                    ],
                   ),
                 ),
-              );
-            }).toList(),
-          ),
+              ),
+            );
+          }),
         ],
       ),
     );
   }
 
   Widget _buildFareCard() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: JT.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: JT.border),
-        boxShadow: JT.cardShadow,
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(color: JT.primaryLight, shape: BoxShape.circle),
-            child: const Icon(Icons.groups_rounded, color: JT.primary),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('$_seats ${_seats == 1 ? 'Seat' : 'Seats'} — Rs ${_totalFare.toStringAsFixed(0)}',
-                    style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w800, color: JT.textPrimary)),
-                const SizedBox(height: 2),
-                Text('Rs ${_farePerSeat.toStringAsFixed(0)} per seat • JAGO will match you with a nearby Car Share vehicle',
-                    style: const TextStyle(fontSize: 12, color: JT.textSecondary)),
-              ],
-            ),
-          ),
-        ],
-      ),
+    return InlineInfoCard(
+      icon: Icons.groups_rounded,
+      title: '$_seats ${_seats == 1 ? 'Seat' : 'Seats'} — Rs ${_totalFare.toStringAsFixed(0)}',
+      subtitle: 'Rs ${_farePerSeat.toStringAsFixed(0)} per seat • JAGO will match you with a nearby Car Share vehicle',
     );
   }
 
@@ -360,36 +411,6 @@ class _CarShareOptionsScreenState extends State<CarShareOptionsScreen> {
           const Text('No Car Share vehicles available right now.',
               textAlign: TextAlign.center, style: TextStyle(color: JT.textSecondary)),
         ],
-      ),
-    );
-  }
-
-  Widget _buildConfirmBar() {
-    final canConfirm = !_booking && !_loading && _hasEligibleVehicle && _error == null;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-      decoration: BoxDecoration(
-        color: JT.bg,
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 12, offset: const Offset(0, -4))],
-      ),
-      child: SafeArea(
-        top: false,
-        child: SizedBox(
-          width: double.infinity,
-          height: 52,
-          child: ElevatedButton(
-            onPressed: canConfirm ? _confirm : null,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: JT.primary,
-              disabledBackgroundColor: JT.iconInactive,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-            ),
-            child: _booking
-                ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                : Text('Confirm Car Share',
-                    style: GoogleFonts.poppins(fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white)),
-          ),
-        ),
       ),
     );
   }

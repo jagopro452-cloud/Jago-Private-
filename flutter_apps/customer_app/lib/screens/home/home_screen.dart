@@ -365,6 +365,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _handleUnauthorized();
         return;
       }
+      // TEMP DEBUG — trace the "Active Trip card never shows" report.
+      debugPrint('[ACTIVE_TRIP_TRACE] _checkActiveTrip: status=${r.statusCode} body=${r.body}');
       if (r.statusCode == 200) {
         final data = jsonDecode(r.body);
         final trip = data['trip'] as Map<String, dynamic>?;
@@ -372,30 +374,35 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           final status = trip['currentStatus']?.toString() ?? '';
           if (status != 'completed' && status != 'cancelled') {
             setState(() => _activeTrip = trip);
+            debugPrint('[ACTIVE_TRIP_TRACE] _activeTrip SET: id=${trip['id']} status=$status');
             // Start auto-cancel timer if searching and no pilot found yet
             if (status == 'searching') {
               _startSearchingTimer(trip['id']?.toString() ?? '');
             }
-            // Restore tracking for active trips including searching state
-            if (['accepted', 'arrived', 'on_the_way', 'in_progress', 'driver_assigned', 'searching']
-                .contains(status)) {
-              final tripId = trip['id']?.toString() ?? '';
-              if (tripId.isNotEmpty && mounted) {
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => TrackingScreen(tripId: tripId),
-                  ),
-                );
-              }
-            }
+            // Previously this also auto-pushReplacement'd straight into
+            // TrackingScreen for every active status — since this function
+            // runs on every cold start AND every app resume (see
+            // didChangeAppLifecycleState), that meant the customer could
+            // never actually stay on Home with the active-trip banner
+            // visible: any resume while a trip was active yanked them back
+            // into Tracking, even if they'd deliberately backed out to Home.
+            // Just populating _activeTrip above is enough — the banner
+            // (_buildActiveTripBanner) already has its own "Track →"
+            // button for the user to opt into tracking explicitly.
+          } else {
+            debugPrint('[ACTIVE_TRIP_TRACE] trip found but terminal: status=$status — not setting _activeTrip');
           }
+        } else {
+          debugPrint('[ACTIVE_TRIP_TRACE] no trip in response (data["trip"] is null)');
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[ACTIVE_TRIP_TRACE] _checkActiveTrip threw: $e');
+    }
   }
 
   Future<void> _checkActiveTripAndRecovery() async {
+    debugPrint('[ACTIVE_TRIP_TRACE] _checkActiveTripAndRecovery called (mounted=$mounted)');
     await _checkActiveTrip();
     if (!mounted) return;
     if (_activeTrip != null) return;
@@ -525,18 +532,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (status == 'completed' || status == 'cancelled') return;
 
       setState(() => _activeParcel = booking);
-      final orderId = booking['id']?.toString() ?? '';
-      if (orderId.isEmpty || !mounted) return;
-
-      if (['accepted', 'driver_assigned', 'picked_up', 'in_transit', 'searching', 'pending']
-          .contains(status)) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => TrackingScreen(tripId: orderId, isParcel: true),
-          ),
-        );
-      }
+      // Previously auto-pushReplacement'd into TrackingScreen here too — same
+      // issue as _checkActiveTrip (see comment there). setState above is
+      // enough; _buildActiveParcelBanner's own tap target opens tracking.
     } catch (_) {}
   }
 

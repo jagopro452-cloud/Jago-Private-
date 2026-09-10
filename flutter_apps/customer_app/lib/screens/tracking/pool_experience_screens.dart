@@ -11,6 +11,9 @@ import '../../services/auth_service.dart';
 import '../../services/socket_service.dart';
 import '../profile/support_chat_screen.dart';
 import '../safety/emergency_contacts_screen.dart';
+import '../../widgets/completion/completion_status_banner.dart';
+import '../../widgets/completion/completion_star_rating.dart';
+import '../../widgets/tracking/tracking_section_card.dart';
 
 class PoolCancellationScreen extends StatefulWidget {
   final String title;
@@ -89,7 +92,7 @@ class _PoolCancellationScreenState extends State<PoolCancellationScreen> {
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
-          _card(
+          TrackingSectionCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -103,7 +106,7 @@ class _PoolCancellationScreenState extends State<PoolCancellationScreen> {
             ),
           ),
           const SizedBox(height: 16),
-          _card(
+          TrackingSectionCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -230,7 +233,7 @@ class _CoPassengerScreenState extends State<CoPassengerScreen> {
               : ListView(
                   padding: const EdgeInsets.all(20),
                   children: [
-                    _card(
+                    TrackingSectionCard(
                       child: Row(
                         children: [
                           _metric('Passengers', '${_occupancy['passengerCount'] ?? _passengers.length}'),
@@ -242,7 +245,7 @@ class _CoPassengerScreenState extends State<CoPassengerScreen> {
                     const SizedBox(height: 16),
                     ..._passengers.map((passenger) => Padding(
                           padding: const EdgeInsets.only(bottom: 12),
-                          child: _card(
+                          child: TrackingSectionCard(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
@@ -423,7 +426,7 @@ class _ReportIssueScreenState extends State<ReportIssueScreen> {
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
-          _card(
+          TrackingSectionCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -564,32 +567,29 @@ class _PoolRatingScreenState extends State<PoolRatingScreen> {
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
-          _card(
+          const CompletionStatusBanner(
+            gradient: JT.completionGradient,
+            shadowColor: JT.completionPrimaryDark,
+            title: 'Rate Your Pool Trip',
+            subtitle: 'Your feedback helps us improve safety & comfort.',
+          ),
+          const SizedBox(height: 16),
+          TrackingSectionCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text('Rate your pool driver', style: JT.subtitle1),
                 const SizedBox(height: 14),
                 ..._ratings.keys.map((label) => Padding(
-                      padding: const EdgeInsets.only(bottom: 14),
+                      padding: const EdgeInsets.only(bottom: 18),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(label, style: JT.bodyPrimary),
                           const SizedBox(height: 8),
-                          Row(
-                            children: List.generate(5, (index) {
-                              final star = index + 1;
-                              return IconButton(
-                                onPressed: () => setState(() => _ratings[label] = star),
-                                padding: EdgeInsets.zero,
-                                visualDensity: VisualDensity.compact,
-                                icon: Icon(
-                                  star <= (_ratings[label] ?? 5) ? Icons.star_rounded : Icons.star_outline_rounded,
-                                  color: JT.warning,
-                                ),
-                              );
-                            }),
+                          CompletionStarRating(
+                            rated: _ratings[label] ?? 5,
+                            onRate: (star) => setState(() => _ratings[label] = star),
                           ),
                         ],
                       ),
@@ -732,7 +732,7 @@ class _PoolDisputeTimelineScreenState extends State<PoolDisputeTimelineScreen> {
                   padding: const EdgeInsets.all(20),
                   children: [
                     if (_items.isEmpty)
-                      _card(
+                      TrackingSectionCard(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -754,7 +754,7 @@ class _PoolDisputeTimelineScreenState extends State<PoolDisputeTimelineScreen> {
                         final updates = List<dynamic>.from(timeline['adminUpdates'] ?? const []);
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 14),
-                          child: _card(
+                          child: TrackingSectionCard(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
@@ -875,7 +875,7 @@ class PoolSupportScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
-          _card(
+          TrackingSectionCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -911,7 +911,7 @@ class PoolSupportScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          _card(
+          TrackingSectionCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1092,7 +1092,7 @@ class _PoolSafetyScreenState extends State<PoolSafetyScreen> {
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
-          _card(
+          TrackingSectionCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1106,7 +1106,7 @@ class _PoolSafetyScreenState extends State<PoolSafetyScreen> {
             ),
           ),
           const SizedBox(height: 16),
-          _card(
+          TrackingSectionCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1127,19 +1127,6 @@ class _PoolSafetyScreenState extends State<PoolSafetyScreen> {
       ),
     );
   }
-}
-
-Widget _card({required Widget child}) {
-  return Container(
-    padding: const EdgeInsets.all(18),
-    decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(22),
-      border: Border.all(color: JT.border),
-      boxShadow: JT.cardShadow,
-    ),
-    child: child,
-  );
 }
 
 Widget _statusPill(String status) {

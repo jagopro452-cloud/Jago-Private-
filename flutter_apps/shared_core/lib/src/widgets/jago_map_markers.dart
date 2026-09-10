@@ -39,6 +39,7 @@ class JagoMapMarkers {
     'auto': 'https://res.cloudinary.com/kits/image/upload/e_make_transparent:15/q_auto/f_png/v1787218843/ChatGPT_Image_Aug_19_2026_12_15_22_PM_icbpan.png',
     'mini_car': 'https://res.cloudinary.com/kits/image/upload/e_make_transparent:15/q_auto/f_png/v1787218843/ChatGPT_Image_Aug_19_2026_12_14_52_PM_w71se5.png',
     'sedan': 'https://res.cloudinary.com/kits/image/upload/e_make_transparent:15/q_auto/f_png/v1787218843/ChatGPT_Image_Aug_19_2026_12_17_44_PM_twmivt.png',
+    'suv': 'https://res.cloudinary.com/kits/image/upload/e_make_transparent:15/q_auto/f_png/v1787218843/ChatGPT_Image_Aug_19_2026_12_20_53_PM_kmitap.png',
     'premium': 'https://res.cloudinary.com/kits/image/upload/e_make_transparent:15/q_auto/f_png/v1787218843/ChatGPT_Image_Aug_19_2026_12_20_53_PM_kmitap.png',
     'bike_parcel': 'https://res.cloudinary.com/kits/image/upload/e_make_transparent:15/q_auto/f_png/v1787218843/ChatGPT_Image_Aug_19_2026_12_24_05_PM_rr9pfc.png',
   };
@@ -63,40 +64,115 @@ class JagoMapMarkers {
     }
     if (t.contains('mini car') || t.contains('mini_car')) return 'mini_car';
     if (t.contains('sedan')) return 'sedan';
+    if (t.contains('suv') || t.contains('xl')) return 'suv';
     if (t.contains('premium')) return 'premium';
     if (t.contains('auto') || t.contains('rickshaw')) return 'auto';
     return null;
   }
 
+  // Only a successful fetch is cached — a failed/timed-out attempt (e.g. a
+  // slow mobile connection) must not permanently lock the caller into the
+  // hand-drawn fallback for the rest of the app session. Leaving the key out
+  // of _photoCache on failure means the next call for the same vehicle type
+  // (self-icon refresh on every GPS tick, or another marker refresh) gets a
+  // fresh network attempt instead of an instantly-replayed null.
   static Future<BitmapDescriptor?> _loadPhotoMarker(String key) {
     if (_photoCache.containsKey(key)) return Future.value(_photoCache[key]);
     return _photoLoading[key] ??= _fetchPhotoMarker(key).then((icon) {
-      _photoCache[key] = icon;
+      if (icon != null) _photoCache[key] = icon;
       _photoLoading.remove(key);
       return icon;
     });
   }
 
-  static Future<BitmapDescriptor?> _fetchPhotoMarker(String key) async {
+  static Future<BitmapDescriptor?> _fetchPhotoMarker(String key) {
     final url = _vehiclePhotoUrls[key];
-    if (url == null) return null;
+    if (url == null) return Future.value(null);
+    return _fetchImageMarker(url);
+  }
+
+  // Marker photos are bounded to this many logical pixels on their longer
+  // edge — matches the hand-drawn markers' footprint so every photo marker
+  // (vehicle or customer) reads at the same "small, map-friendly" size,
+  // never dominating the map regardless of the source image's own resolution
+  // or aspect ratio.
+  static const int _markerTargetSize = 96;
+
+  static Future<BitmapDescriptor?> _fetchImageMarker(String url) async {
     try {
       final res =
-          await http.get(Uri.parse(url)).timeout(const Duration(seconds: 8));
+          await http.get(Uri.parse(url)).timeout(const Duration(seconds: 15));
       if (res.statusCode != 200) return null;
-      // Downscale during decode — same target size as the hand-drawn
-      // markers use — so a full-resolution source photo doesn't render as
-      // an oversized marker on the map.
-      final codec =
-          await ui.instantiateImageCodec(res.bodyBytes, targetWidth: 96);
-      final frame = await codec.getNextFrame();
-      final byteData =
-          await frame.image.toByteData(format: ui.ImageByteFormat.png);
+      // Decode bounded to _markerTargetSize on whichever edge is longer —
+      // a portrait source stays no taller than the target, a landscape one
+      // stays no wider — so the artwork is never upscaled or left oversized
+      // before the square-canvas step below.
+      var codec = await ui.instantiateImageCodec(res.bodyBytes,
+          targetWidth: _markerTargetSize);
+      var frame = await codec.getNextFrame();
+      var image = frame.image;
+      if (image.height > _markerTargetSize) {
+        codec = await ui.instantiateImageCodec(res.bodyBytes,
+            targetHeight: _markerTargetSize);
+        frame = await codec.getNextFrame();
+        image = frame.image;
+      }
+      final squared = await _padToSquare(image, _markerTargetSize);
+      final byteData = await squared.toByteData(format: ui.ImageByteFormat.png);
       if (byteData == null) return null;
       return BitmapDescriptor.bytes(byteData.buffer.asUint8List());
     } catch (_) {
       return null;
     }
+  }
+
+  // Confirmed on-device: this Google Maps SDK build silently fails to render
+  // a marker bitmap whose width and height differ enough (a 200x300 portrait
+  // PNG never appeared on the map; an otherwise-identical 200x200 version of
+  // the same artwork rendered fine). Rather than stretch non-square photos
+  // to fit — which would distort them — letterbox onto a transparent square
+  // canvas of a FIXED size (never the image's own longer edge, which would
+  // let a tall/wide source render larger than every other marker) so every
+  // photo marker is both safely square and uniformly sized, with the
+  // artwork's proportions and centering preserved.
+  static Future<ui.Image> _padToSquare(ui.Image image, int side) async {
+    if (image.width == side && image.height == side) return image;
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(
+        recorder, Rect.fromLTWH(0, 0, side.toDouble(), side.toDouble()));
+    final dx = (side - image.width) / 2;
+    final dy = (side - image.height) / 2;
+    canvas.drawImage(image, Offset(dx, dy), Paint());
+    return recorder.endRecording().toImage(side, side);
+  }
+
+  // ── Customer identification marker ────────────────────────────────────
+  // A single fixed photo representing the customer on the map (pickup /
+  // current location) — deliberately separate from _vehiclePhotoUrls so it
+  // can never be resolved by vehicle-type matching and accidentally shown
+  // as (or replaced by) a vehicle marker. Only a successful fetch is
+  // cached, same reasoning as the vehicle photos above: a slow/failed
+  // attempt must not permanently lock the caller into the fallback pin.
+  static const String _customerPhotoUrl =
+      'https://res.cloudinary.com/kits/image/upload/v1787550714/ChatGPT_Image_Aug_24_2026_11_20_05_AM_zebw8f.png';
+  static BitmapDescriptor? _customerCache;
+  static Future<BitmapDescriptor?>? _customerLoading;
+
+  /// The customer's map identity — always this exact photo, regardless of
+  /// the booked vehicle type. Falls back to the existing hand-drawn pickup
+  /// pin ([pickup]) if the photo can't be fetched, so the marker never
+  /// silently disappears on a bad connection.
+  static Future<BitmapDescriptor> customer() async {
+    final cached = _customerCache;
+    if (cached != null) return cached;
+    final photo =
+        await (_customerLoading ??= _fetchImageMarker(_customerPhotoUrl));
+    _customerLoading = null;
+    if (photo != null) {
+      _customerCache = photo;
+      return photo;
+    }
+    return pickup();
   }
 
   static Future<BitmapDescriptor> vehicle(
@@ -132,13 +208,113 @@ class JagoMapMarkers {
     const double size = 160;
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder, const Rect.fromLTWH(0, 0, size, size));
-    const center = Offset(size / 2, 58);
+    _drawDestinationPin(canvas, size);
+
+    final image =
+        await recorder.endRecording().toImage(size.toInt(), size.toInt());
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    final result = BitmapDescriptor.bytes(bytes!.buffer.asUint8List());
+    _cache[key] = result;
+    return result;
+  }
+
+  static final Map<String, BitmapDescriptor> _labelCache = {};
+
+  // Same finish-flag pin as [destination], with a small always-visible name
+  // chip baked above it. A Marker's infoWindow only appears on tap, which
+  // isn't enough for an "always visible" destination label, so the text is
+  // rendered directly into the marker bitmap instead. Cached per label text
+  // — bounded by how many distinct destinations a driver sees in a session.
+  // Callers should anchor this marker at Offset(0.5, 0.92) (the pin's tip
+  // sits lower in this taller canvas than in [destination]'s Offset(0.5, 0.9)).
+  static Future<BitmapDescriptor> destinationWithLabel(String label) async {
+    final trimmed = label.trim();
+    if (trimmed.isEmpty) return destination();
+    final cacheKey = 'destination_label:$trimmed';
+    final cached = _labelCache[cacheKey];
+    if (cached != null) return cached;
+
+    const double pinSize = 160;
+    const double labelHeight = 32;
+    const double gap = 8;
+    const double canvasWidth = pinSize + 40;
+    const double canvasHeight = labelHeight + gap + pinSize;
+    const double pinOffsetX = (canvasWidth - pinSize) / 2;
+    const double pinOffsetY = labelHeight + gap;
+    const double centerX = canvasWidth / 2;
+
+    final recorder = ui.PictureRecorder();
+    final canvas =
+        Canvas(recorder, const Rect.fromLTWH(0, 0, canvasWidth, canvasHeight));
+
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: '\u{1F4CD} $trimmed',
+        style: const TextStyle(
+          fontSize: 12.5,
+          fontWeight: FontWeight.w600,
+          color: Colors.white,
+          height: 1.0,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+      maxLines: 1,
+      ellipsis: '…',
+    )..layout(maxWidth: canvasWidth - 16);
+
+    final chipWidth = (textPainter.width + 22).clamp(0, canvasWidth).toDouble();
+    final chipRect = RRect.fromRectAndRadius(
+      Rect.fromCenter(
+          center: Offset(centerX, labelHeight / 2),
+          width: chipWidth,
+          height: labelHeight),
+      const Radius.circular(16),
+    );
+    canvas.drawRRect(
+      chipRect.shift(const Offset(0, 2)),
+      Paint()
+        ..color = Colors.black.withValues(alpha: 0.18)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5),
+    );
+    canvas.drawRRect(chipRect, Paint()..color = _primaryColor);
+    canvas.drawRRect(
+      chipRect,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.4
+        ..color = Colors.white.withValues(alpha: 0.85),
+    );
+    textPainter.paint(
+      canvas,
+      Offset(centerX - textPainter.width / 2, labelHeight / 2 - textPainter.height / 2),
+    );
+
+    canvas.save();
+    canvas.translate(pinOffsetX, pinOffsetY);
+    _drawDestinationPin(canvas, pinSize);
+    canvas.restore();
+
+    final image = await recorder
+        .endRecording()
+        .toImage(canvasWidth.toInt(), canvasHeight.toInt());
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    final result = BitmapDescriptor.bytes(bytes!.buffer.asUint8List());
+    _labelCache[cacheKey] = result;
+    return result;
+  }
+
+  // Shared geometry for the finish-flag destination pin, drawn into a
+  // [size] x [size] region of whatever canvas/offset the caller has already
+  // set up — used by both [destination] (drawn at the canvas origin) and
+  // [destinationWithLabel] (drawn translated below a label chip).
+  static void _drawDestinationPin(Canvas canvas, double size) {
+    final center = Offset(size / 2, 58);
 
     final shadowPaint = Paint()
       ..color = Colors.black.withValues(alpha: 0.20)
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 11);
     canvas.drawOval(
-      Rect.fromCenter(center: const Offset(size / 2, 134), width: 48, height: 15),
+      Rect.fromCenter(center: Offset(size / 2, 134), width: 48, height: 15),
       shadowPaint,
     );
 
@@ -158,7 +334,7 @@ class JagoMapMarkers {
       Paint()
         ..shader = ui.Gradient.linear(
           const Offset(0, 16),
-          const Offset(size, 120),
+          Offset(size, 120),
           [const Color(0xFFFF6B7A), _errorColor, const Color(0xFF8E0F27)],
         ),
     );
@@ -186,13 +362,6 @@ class JagoMapMarkers {
       center: center,
       size: 30,
     );
-
-    final image =
-        await recorder.endRecording().toImage(size.toInt(), size.toInt());
-    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-    final result = BitmapDescriptor.bytes(bytes!.buffer.asUint8List());
-    _cache[key] = result;
-    return result;
   }
 
   static Future<BitmapDescriptor> _pin(

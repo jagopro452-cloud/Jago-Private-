@@ -70,6 +70,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
   Map<String, dynamic>? _incomingTrip;
   Map<String, dynamic>? _incomingParcel;
   Map<String, dynamic>? _incomingPoolOffer;
+  // The driver's currently ACCEPTED ride/parcel (as opposed to _incomingTrip/
+  // _incomingParcel, which are not-yet-accepted offers). Populated at accept
+  // time and by _recoverActiveTrip on cold start/resume/return-to-Home, and
+  // drives the persistent "Active Trip" card on Home — see _buildActiveTripCard.
+  Map<String, dynamic>? _activeTripCard;
+  bool _activeTripIsParcel = false;
   String _vehicleCategory = '';
   // vehicle_categories.type ("motor_bike" / "auto" / "car") — a stable
   // machine classification, unlike _vehicleCategory (the human-editable
@@ -189,7 +195,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     } catch (_) {}
   }
 
-  // ── App state recovery: if driver has an active trip, go to TripScreen directly ──
+  // ── App state recovery: if driver has an active trip, surface it on Home
+  // as a persistent "Active Trip" card rather than force-navigating. This
+  // runs on cold start, on every app resume, and after returning to Home
+  // from the trip screen — so it doubles as the resync the trip screen's
+  // own back button now relies on (see trip_screen.dart's PopScope). The
+  // driver taps "Resume Trip" to actually re-enter TripScreen/ParcelDeliveryScreen.
   Future<void> _recoverActiveTrip() async {
     try {
       final headers = await AuthService.getHeaders();
@@ -197,10 +208,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         Uri.parse('${ApiConfig.baseUrl}/api/app/driver/active-trip'),
         headers: headers,
       );
+      // TEMP DEBUG — trace the "Active Trip card never shows" report.
+      debugPrint('[ACTIVE_TRIP_TRACE] _recoverActiveTrip: status=${res.statusCode} body=${res.body}');
       if (res.statusCode != 200) return;
       final data = jsonDecode(res.body) as Map<String, dynamic>;
       final trip = data['trip'];
-      if (trip == null) return;
+      if (trip == null) {
+        debugPrint('[ACTIVE_TRIP_TRACE] no trip in response — clearing _activeTripCard');
+        if (mounted) setState(() => _activeTripCard = null);
+        return;
+      }
       final tripData = Map<String, dynamic>.from(trip as Map);
       final status = tripData['currentStatus'] ?? tripData['current_status'] ?? '';
       final serviceType = (tripData['type'] ??
@@ -214,19 +231,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
       final validStatuses = isParcel
           ? ['accepted', 'driver_assigned', 'arrived', 'in_transit']
           : ['accepted', 'arrived', 'on_the_way', 'in_progress', 'driver_assigned'];
-      if (!validStatuses.contains(status)) return;
+      if (!validStatuses.contains(status)) {
+        debugPrint('[ACTIVE_TRIP_TRACE] trip found but status "$status" not in $validStatuses (isParcel=$isParcel) — clearing');
+        if (mounted) setState(() => _activeTripCard = null);
+        return;
+      }
       if (!mounted) return;
-      // Navigate directly to trip screen — driver was mid-trip when app crashed
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (_) => isParcel
-              ? ParcelDeliveryScreen(order: tripData)
-              : TripScreen(trip: tripData),
-        ),
-      );
+      setState(() {
+        _activeTripCard = tripData;
+        _activeTripIsParcel = isParcel;
+      });
+      debugPrint('[ACTIVE_TRIP_TRACE] _activeTripCard SET: id=${tripData['id']} status=$status isParcel=$isParcel');
       return;
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[ACTIVE_TRIP_TRACE] _recoverActiveTrip threw: $e');
+    }
 
     try {
       final headers = await AuthService.getHeaders();
@@ -422,6 +441,33 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
       AlarmService().stopAlarm();
     }));
 
+    // Keep the Active Trip card (an already-accepted trip, not the incoming
+    // offer above) in sync in real time even while the driver is sitting on
+    // Home rather than TripScreen — TripScreen has its own poll/socket
+    // listeners for this, but those stop the moment the driver backs out to
+    // Home, and nothing else was watching this trip's status from there.
+    _subs.add(_socket.onTripStatus.listen((data) {
+      if (!mounted || _activeTripCard == null) return;
+      final eventTripId = (data['tripId'] ?? data['id'] ?? '').toString();
+      final cardTripId = (_activeTripCard?['id'] ?? _activeTripCard?['tripId'] ?? '').toString();
+      if (eventTripId.isEmpty || cardTripId.isEmpty || eventTripId != cardTripId) return;
+      final status = data['status']?.toString() ?? '';
+      if (status == 'completed' || status == 'cancelled') {
+        setState(() => _activeTripCard = null);
+      } else {
+        setState(() => _activeTripCard = {..._activeTripCard!, 'currentStatus': status});
+      }
+    }));
+
+    _subs.add(_socket.onTripCancelled.listen((data) {
+      if (!mounted || _activeTripCard == null) return;
+      final eventTripId = (data['tripId'] ?? data['id'] ?? '').toString();
+      final cardTripId = (_activeTripCard?['id'] ?? _activeTripCard?['tripId'] ?? '').toString();
+      if (eventTripId.isNotEmpty && eventTripId == cardTripId) {
+        setState(() => _activeTripCard = null);
+      }
+    }));
+
     _subs.add(_socket.onNewParcel.listen((parcel) {
       if (!mounted) return;
       if (!_isOnline) return;
@@ -520,6 +566,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
       // call repeatedly: it's a no-op unless it actually finds something
       // to resume into.
       _recoverActiveTrip();
+      // _vehicleTypeCode/_carShareEnabled/_isOnline were previously only
+      // ever fetched once, from initState. If that one dashboard call hit a
+      // network blip (very plausible right as the app resumes and the
+      // connection is still reattaching), _vehicleTypeCode was permanently
+      // stuck at '' for the rest of the session — silently hiding the Car
+      // Share segment and mislabeling "Online" for what should be "Cab
+      // Service" (see _isCabOrCarCategory). Re-fetching on every resume
+      // makes that self-heal, and also picks up any backend-side change
+      // (admin toggling car_share_enabled/vehicle category) instead of
+      // leaving the UI stale until the driver force-closes the app.
+      _fetchDashboard();
     }
     if (state == AppLifecycleState.paused) {
       // App backgrounded — suspend GPS stream + server poll to save battery
@@ -764,7 +821,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     }
   }
 
-  Future<void> _fetchDashboard() async {
+  Future<void> _fetchDashboard({bool isRetry = false}) async {
     final token = await AuthService.getToken();
     if (token == null || token.isEmpty) {
       _handleSessionExpired();
@@ -772,7 +829,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
     }
     try {
       final headers = await AuthService.getHeaders();
-      final res = await http.get(Uri.parse(ApiConfig.driverDashboard), headers: headers);
+      final res = await http.get(Uri.parse(ApiConfig.driverDashboard), headers: headers)
+          .timeout(const Duration(seconds: 10));
       if (res.statusCode == 200) {
         final data = jsonDecode(res.body);
         if (!mounted) return;
@@ -788,6 +846,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
           _vehicleModel = data['vehicleModel'] ?? '';
           _driverRating = double.tryParse(data['rating']?.toString() ?? '') ?? _driverRating;
         });
+        // TEMP DEBUG — trace the Car Share "vanishing button" report: dump
+        // every field that feeds _isCabOrCarCategory/_driverMode/_buildModeSelector
+        // right after each dashboard sync so a bad fetch is visible in logs.
+        debugPrint('[CAR_SHARE_TRACE] dashboard synced: vehicleNumber=$_vehicleNumber '
+            'vehicleTypeCode="$_vehicleTypeCode" isCabOrCarCategory=$_isCabOrCarCategory '
+            'carShareEnabled=$_carShareEnabled isOnline=$_isOnline '
+            'rawVehicleType=${data['vehicleType']} rawCarShareEnabled=${data['carShareEnabled']}');
         if (_isOnline) {
           OnlineKeepAliveService.start();
           if (!_hasValidLocationFix) {
@@ -810,8 +875,24 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
       } else if (res.statusCode == 401) {
         _handleSessionExpired();
         return;
+      } else {
+        debugPrint('[CAR_SHARE_TRACE] dashboard fetch returned ${res.statusCode}, isRetry=$isRetry');
       }
-    } catch (_) {}
+    } catch (e) {
+      // Previously this swallowed every failure with no retry — a single
+      // network blip (very plausible right when the app resumes and the
+      // connection is still reattaching) left _vehicleTypeCode stuck at its
+      // '' default for the rest of the session, which silently hides the
+      // Car Share segment in _buildModeSelector even though the driver's
+      // Car Share session is still active on the backend. One bounded retry
+      // gives a transient failure a second chance without risking a retry
+      // loop.
+      debugPrint('[CAR_SHARE_TRACE] dashboard fetch failed (isRetry=$isRetry): $e');
+      if (!isRetry && mounted) {
+        await Future.delayed(const Duration(seconds: 3));
+        if (mounted) await _fetchDashboard(isRetry: true);
+      }
+    }
   }
 
   Future<void> _fetchLaunchBenefit() async {
@@ -1237,6 +1318,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
       );
       return;
     }
+    setState(() {
+      _activeTripCard = fullTrip;
+      _activeTripIsParcel = false;
+    });
+    debugPrint('[ACTIVE_TRIP_TRACE] _acceptIncomingTrip: _activeTripCard SET at accept time, id=${fullTrip['id']}');
     Navigator.push(context, MaterialPageRoute(builder: (_) => TripScreen(trip: fullTrip!)));
   }
 
@@ -1266,6 +1352,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
       if (r.statusCode == 200) {
         final data = jsonDecode(r.body);
         final order = data['order'] as Map<String, dynamic>? ?? {};
+        setState(() {
+          _activeTripCard = order;
+          _activeTripIsParcel = true;
+        });
+        debugPrint('[ACTIVE_TRIP_TRACE] _acceptIncomingParcel: _activeTripCard SET at accept time, id=${order['id']}');
         Navigator.push(context, MaterialPageRoute(builder: (_) => ParcelDeliveryScreen(order: order)));
       } else {
         _showSnack('Already taken by another driver', error: true);
@@ -1368,6 +1459,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
   /// safely Offline and say so, since that's the only state guaranteed to
   /// match what the server actually has.
   Future<void> _switchDriverMode(DriverServiceMode target) async {
+    debugPrint('[CAR_SHARE_TRACE] _switchDriverMode called: target=$target current=$_driverMode '
+        'vehicleNumber=$_vehicleNumber isCabOrCarCategory=$_isCabOrCarCategory '
+        'modeSwitching=$_modeSwitching');
     if (_modeSwitching || target == _driverMode) return;
     HapticFeedback.mediumImpact();
 
@@ -1495,6 +1589,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         _carShareEnabled = target == DriverServiceMode.carShare;
         _modeSwitching = false;
       });
+      debugPrint('[CAR_SHARE_TRACE] _switchDriverMode succeeded: target=$target '
+          'isOnline=$_isOnline carShareEnabled=$_carShareEnabled');
 
       if (target == DriverServiceMode.cab) {
         _startLocationStreaming();
@@ -1526,6 +1622,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         _refreshCarShareState();
       }
     } catch (e) {
+      debugPrint('[CAR_SHARE_TRACE] _switchDriverMode failed: target=$target '
+          'turnedOffPrevious=$turnedOffPrevious error=$e');
       if (!mounted) return;
       if (turnedOffPrevious) {
         // The previous service is already confirmed off on the backend —
@@ -1613,8 +1711,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
         final body = jsonDecode(res.body);
         final user = (body is Map && body['user'] is Map) ? body['user'] as Map : body as Map;
         setState(() => _carShareEnabled = user['carShareEnabled'] == true);
+        debugPrint('[CAR_SHARE_TRACE] _refreshCarShareState: carShareEnabled=$_carShareEnabled '
+            'rawVehicleCategoryType=${user['vehicleCategoryType']}');
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[CAR_SHARE_TRACE] _refreshCarShareState failed: $e');
+    }
   }
 
   /// The on-screen control for `_driverMode`. Cab/Car category drivers get
@@ -1626,9 +1728,30 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
   /// another calls `_switchDriverMode`.
   Widget _buildModeSelector() {
     final mode = _driverMode;
-    final segments = _isCabOrCarCategory
+    // Car Share is only *offered* for Cab/Car categories (_isCabOrCarCategory
+    // gates _switchDriverMode too, so it can never be activated otherwise),
+    // but a driver who is ALREADY in Car Share (_carShareEnabled == true,
+    // confirmed by the backend) must never have that segment silently
+    // dropped just because _vehicleTypeCode hasn't loaded yet or a refetch
+    // came back empty — see _fetchDashboard's debug log for how that
+    // desync was reproduced. Hiding it here previously left `mode` (still
+    // carShare) absent from `segments`, so `indexOf` returned -1 and the
+    // clamp below silently landed the highlighted pill on "ONLINE" instead
+    // — misrepresenting an active Car Share session as if the driver had
+    // gone online. Always keep the segment visible whenever it reflects
+    // real backend state, even if the category flag is momentarily stale.
+    final showCarShareSegment = _isCabOrCarCategory || _carShareEnabled;
+    final segments = showCarShareSegment
         ? const [DriverServiceMode.cab, DriverServiceMode.offline, DriverServiceMode.carShare]
         : const [DriverServiceMode.cab, DriverServiceMode.offline];
+    // TEMP DEBUG — only fires on the exact mismatch that caused the "Car
+    // Share disappears" report: the category flag says no, but the backend
+    // flag says the driver is genuinely in Car Share right now.
+    if (_carShareEnabled && !_isCabOrCarCategory) {
+      debugPrint('[CAR_SHARE_TRACE] MISMATCH in _buildModeSelector: carShareEnabled=true but '
+          'isCabOrCarCategory=false (vehicleTypeCode="$_vehicleTypeCode") — '
+          'segment kept visible via showCarShareSegment fallback');
+    }
     final index = segments.indexOf(mode).clamp(0, segments.length - 1);
     final widthFactor = 1 / segments.length;
     final alignment = segments.length == 1
@@ -1694,6 +1817,111 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
             ),
         ],
       ),
+    );
+  }
+
+  /// Persistent "Active Trip" card — shown on Home whenever the driver has
+  /// an already-accepted ride/parcel, regardless of how they got back to
+  /// Home (Back from TripScreen, app resume, or a fresh cold start). Mirrors
+  /// the customer app's _buildActiveTripBanner. Tapping "Resume Trip"
+  /// re-enters the existing TripScreen/ParcelDeliveryScreen for this exact
+  /// trip — never a new/duplicate screen, never a hardcoded id.
+  Widget _buildActiveTripCard() {
+    final trip = _activeTripCard!;
+    final status = (trip['currentStatus'] ?? trip['current_status'] ?? 'accepted').toString();
+    final customerName = (trip['customerName'] ?? trip['customer_name'] ?? 'Customer').toString();
+    final pickup = (trip['pickupAddress'] ?? trip['pickup_address'] ?? 'Pickup').toString();
+    final destination =
+        (trip['destinationAddress'] ?? trip['destination_address'] ?? 'Destination').toString();
+
+    final statusLabel = _activeTripIsParcel
+        ? {
+              'accepted': 'Heading to pickup',
+              'driver_assigned': 'Heading to pickup',
+              'arrived': 'At pickup',
+              'in_transit': 'Delivering parcel',
+            }[status] ??
+            'Delivery active'
+        : {
+              'accepted': 'Heading to pickup',
+              'driver_assigned': 'Heading to pickup',
+              'arrived': 'Waiting at pickup',
+              'on_the_way': 'Trip in progress',
+              'in_progress': 'Trip in progress',
+            }[status] ??
+            'Trip active';
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.20)),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 16, offset: const Offset(0, 4)),
+        ],
+      ),
+      child: Row(children: [
+        Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: const Color(0xFF10B981).withValues(alpha: 0.10),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(
+            _activeTripIsParcel ? Icons.local_shipping_rounded : Icons.directions_car_filled_rounded,
+            color: const Color(0xFF10B981),
+            size: 22,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('ACTIVE TRIP',
+                  style: GoogleFonts.poppins(
+                      color: const Color(0xFF10B981), fontWeight: FontWeight.w700, fontSize: 10, letterSpacing: 0.5)),
+              const SizedBox(height: 2),
+              Text(statusLabel,
+                  style: GoogleFonts.poppins(color: JT.textPrimary, fontWeight: FontWeight.w500, fontSize: 14)),
+              Text(customerName,
+                  style: GoogleFonts.poppins(color: JT.textSecondary, fontSize: 11, fontWeight: FontWeight.w500),
+                  overflow: TextOverflow.ellipsis),
+              Text(
+                '${pickup.length > 18 ? '${pickup.substring(0, 16)}...' : pickup} → '
+                '${destination.length > 18 ? '${destination.substring(0, 16)}...' : destination}',
+                style: GoogleFonts.poppins(color: JT.textSecondary, fontSize: 10, fontWeight: FontWeight.w400),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        GestureDetector(
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => _activeTripIsParcel
+                    ? ParcelDeliveryScreen(order: trip)
+                    : TripScreen(trip: trip),
+              ),
+            );
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(
+              color: const Color(0xFF10B981).withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text('Resume →',
+                style: GoogleFonts.poppins(
+                    color: const Color(0xFF10B981), fontWeight: FontWeight.w500, fontSize: 12)),
+          ),
+        ),
+      ]),
     );
   }
 
@@ -2052,6 +2280,25 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
               ),
             ),
           ),
+          // TEMP DEBUG — visible build marker to confirm which build a given
+          // install is actually running, added to trace reports of a fresh
+          // install still showing an old Home-screen toggle. Remove once
+          // that's confirmed resolved.
+          Positioned(
+            top: 0,
+            right: 0,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.55),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Text(
+                'BUILD 1.0.102+102',
+                style: TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -2161,6 +2408,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
           ),
           const SizedBox(height: 18),
           _buildModeSelector(),
+          if (_activeTripCard != null) ...[
+            const SizedBox(height: 16),
+            _buildActiveTripCard(),
+          ],
           const SizedBox(height: 24),
           Row(
             children: [

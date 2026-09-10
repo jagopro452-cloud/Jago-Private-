@@ -12,6 +12,7 @@ import '../../services/auth_service.dart';
 import '../../services/navigation_service.dart';
 import '../../services/socket_service.dart';
 import '../../services/error_reporting.dart';
+import '../../services/overlay_bubble_service.dart';
 import '../home/home_screen.dart';
 
 List<LatLng> _decodePolyline(String encoded) {
@@ -68,7 +69,7 @@ class ParcelDeliveryScreen extends StatefulWidget {
 }
 
 class _ParcelDeliveryScreenState extends State<ParcelDeliveryScreen>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
 
   final SocketService _socket = SocketService();
   final NavigationService _navigation = NavigationService.instance;
@@ -103,6 +104,7 @@ class _ParcelDeliveryScreenState extends State<ParcelDeliveryScreen>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _order = Map<String, dynamic>.from(widget.order);
     final raw = _order['drop_locations'];
     if (raw is List) {
@@ -131,16 +133,30 @@ class _ParcelDeliveryScreenState extends State<ParcelDeliveryScreen>
     _navigation.init();
     _socket.connect(ApiConfig.socketUrl);
     _startLocationUpdates();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _syncMapForStage());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _syncMapForStage();
+      if (mounted) OverlayBubbleService.maybePromptForPermission(context);
+    });
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    OverlayBubbleService.hide();
     _otpCtrl.dispose();
     _pulseCtrl.dispose();
     _locationTimer?.cancel();
     _socket.disconnect();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      OverlayBubbleService.hide();
+    } else if (state == AppLifecycleState.paused) {
+      OverlayBubbleService.show();
+    }
   }
 
   String get _orderId => _order['id']?.toString() ?? '';

@@ -13,6 +13,16 @@ import '../../services/socket_service.dart';
 import '../call/call_screen.dart';
 import '../chat/trip_chat_sheet.dart';
 import 'pool_experience_screens.dart';
+import '../../widgets/tracking/tracking_header_bar.dart';
+import '../../widgets/tracking/search_pulse_icon.dart';
+import '../../widgets/tracking/search_live_pill.dart';
+import '../../widgets/tracking/search_stage_stepper.dart';
+import '../../widgets/tracking/searching_hero_card.dart';
+import '../../widgets/tracking/trip_status_header.dart';
+import '../../widgets/tracking/driver_matched_card.dart';
+import '../../widgets/tracking/route_progress_panel.dart';
+import '../../widgets/tracking/cancelled_trip_card.dart';
+import '../../widgets/tracking/tracking_section_card.dart';
 
 class LocalPoolStatusScreen extends StatefulWidget {
   final String requestId;
@@ -57,16 +67,12 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
   StreamSubscription<Map<String, dynamic>>? _refundUpdateSub;
   StreamSubscription<Map<String, dynamic>>? _safetyUpdateSub;
 
-  Widget _buildSheetHandle() {
-    return Container(
-      width: 44,
-      height: 4,
-      decoration: BoxDecoration(
-        color: JT.border,
-        borderRadius: BorderRadius.circular(4),
-      ),
-    );
-  }
+  // Draggable bottom sheet height, mirroring TrackingScreen's identical
+  // mechanic — self-contained UI/gesture state only, no API impact. Stays
+  // draggable for every state except 'dropped' (the pool equivalent of
+  // Bike/Auto's fully-completed state).
+  double _draggablePanelHeightFraction = 0.4;
+  bool get _isDraggablePanelStatus => _status != 'dropped';
 
   Widget _buildLoadingState() {
     return Center(
@@ -109,6 +115,23 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
             '')
         .toString();
   }
+
+  IconData _iconForVehicleLabel(String label) {
+    final l = label.toLowerCase();
+    if (l.contains('bike') || l.contains('two')) return Icons.two_wheeler_rounded;
+    if (l.contains('auto') || l.contains('rickshaw')) return Icons.electric_rickshaw_rounded;
+    return Icons.directions_car_filled_rounded;
+  }
+
+  String? get _driverSafetyLabel {
+    final safety = _booking?['driverSafety'] is Map<String, dynamic>
+        ? _booking!['driverSafety'] as Map<String, dynamic>
+        : null;
+    return safety?['badgeLabel']?.toString();
+  }
+
+  int get _seatsRequested =>
+      int.tryParse('${_booking?['seats_requested'] ?? _booking?['seatsRequested'] ?? 1}') ?? 1;
 
   Future<void> _updateLiveMapMarkers() async {
     final pickupLat = double.tryParse('${_booking?['pickup_lat'] ?? ''}');
@@ -533,191 +556,11 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
     }
   }
 
-  Widget _poolProgressCard() {
-    final states = <String>[
-      'searching',
-      'pending_driver_accept',
-      'matched',
-      'picked_up',
-      'dropped',
-    ];
-    final labels = <String, String>{
-      'searching': 'Searching',
-      'pending_driver_accept': 'Confirming',
-      'matched': 'Driver matched',
-      'picked_up': 'Onboard',
-      'dropped': 'Completed',
-    };
-    final activeIndex = states.indexOf(_status).clamp(0, states.length - 1);
-
-    return _card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Journey Progress',
-            style: GoogleFonts.poppins(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              color: JT.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: List.generate(states.length, (index) {
-              final done = index <= activeIndex;
-              return Expanded(
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 250),
-                        height: 6,
-                        decoration: BoxDecoration(
-                          color: done ? JT.primary : JT.border,
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                      ),
-                    ),
-                    if (index < states.length - 1) const SizedBox(width: 6),
-                  ],
-                ),
-              );
-            }),
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: states.map((state) {
-              final idx = states.indexOf(state);
-              final done = idx <= activeIndex;
-              return Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: done
-                      ? JT.primary.withValues(alpha: 0.08)
-                      : JT.bgSoft,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(
-                    color: done
-                        ? JT.primary.withValues(alpha: 0.16)
-                        : JT.border,
-                  ),
-                ),
-                child: Text(
-                  labels[state] ?? state,
-                  style: GoogleFonts.poppins(
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w600,
-                    color: done ? JT.primary : JT.textSecondary,
-                  ),
-                ),
-              );
-            }).toList(),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _stopSequenceCard() {
-    return _card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Ride Sequence',
-            style: GoogleFonts.poppins(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              color: JT.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 12),
-          _sequenceNode(
-            index: 1,
-            title: 'Pickup point',
-            subtitle: widget.pickupAddress,
-            active: _status != 'dropped',
-          ),
-          const SizedBox(height: 10),
-          _sequenceNode(
-            index: 2,
-            title: 'Boarding OTP',
-            subtitle: _status == 'matched' || _status == 'picked_up' || _status == 'dropped'
-                ? 'Share OTP only after the pool driver reaches you.'
-                : 'OTP unlocks after the driver confirms your seat.',
-            active: _status == 'matched' || _status == 'picked_up' || _status == 'dropped',
-          ),
-          const SizedBox(height: 10),
-          _sequenceNode(
-            index: 3,
-            title: 'Drop point',
-            subtitle: widget.dropAddress,
-            active: _status == 'picked_up' || _status == 'dropped',
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _sequenceNode({
-    required int index,
-    required String title,
-    required String subtitle,
-    required bool active,
-  }) {
-    final color = active ? JT.primary : JT.textSecondary;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: 28,
-          height: 28,
-          decoration: BoxDecoration(
-            color: active ? JT.primary.withValues(alpha: 0.10) : JT.bgSoft,
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: Center(
-            child: Text(
-              '$index',
-              style: GoogleFonts.poppins(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: color,
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: GoogleFonts.poppins(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: JT.textPrimary,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                subtitle,
-                style: GoogleFonts.poppins(
-                  fontSize: 12,
-                  color: JT.textSecondary,
-                  height: 1.45,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
+  // Distance-away phrasing shared by the pickup-heading route panel — mirrors
+  // TrackingScreen._formatDistanceAway exactly.
+  String _formatDistanceAway(double km) {
+    if (km < 1) return '${(km * 1000).round()} m away';
+    return '${km.toStringAsFixed(1)} km away';
   }
 
   @override
@@ -726,419 +569,483 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
         ? _booking!['driver'] as Map<String, dynamic>
         : null;
     final fare = double.tryParse('${_booking?['total_fare'] ?? _booking?['totalFare'] ?? 0}') ?? 0;
-    final seats = int.tryParse('${_booking?['seats_requested'] ?? _booking?['seatsRequested'] ?? 1}') ?? 1;
+    final seats = _seatsRequested;
     final otp = _booking?['boarding_otp']?.toString() ?? _booking?['boardingOtp']?.toString() ?? '----';
 
     return Scaffold(
       backgroundColor: Colors.white,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        surfaceTintColor: Colors.transparent,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: JT.textPrimary),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Text(
-          'Local Pool Ride',
-          style: GoogleFonts.poppins(fontWeight: FontWeight.w600, color: JT.textPrimary, fontSize: 17),
-        ),
-      ),
-      body: _loading
-          ? _buildLoadingState()
-          : RefreshIndicator(
-              onRefresh: _load,
-              color: JT.primary,
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final sheetMaxHeight =
-                      constraints.maxHeight > 780 ? 360.0 : 330.0;
-                  return Stack(
-                    children: [
-                      Positioned.fill(
-                        child: ListView(
-                          physics: const AlwaysScrollableScrollPhysics(),
+      body: Column(
+        children: [
+          TrackingHeaderBar(
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back_ios_new_rounded, color: JT.textPrimary),
+              onPressed: () => Navigator.pop(context),
+            ),
+          ),
+          Expanded(
+            child: _loading
+                ? _buildLoadingState()
+                : RefreshIndicator(
+                    onRefresh: _load,
+                    color: JT.primary,
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        return Stack(
                           children: [
-                            SizedBox(
-                              height: constraints.maxHeight,
-                              child: _liveMapCard(),
+                            Positioned.fill(
+                              child: ListView(
+                                physics: const AlwaysScrollableScrollPhysics(),
+                                children: [
+                                  SizedBox(
+                                    height: constraints.maxHeight,
+                                    child: _liveMapCard(),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Align(
+                              alignment: Alignment.bottomCenter,
+                              child: Container(
+                                constraints: _isDraggablePanelStatus
+                                    ? BoxConstraints(
+                                        minHeight: constraints.maxHeight * _draggablePanelHeightFraction,
+                                        maxHeight: constraints.maxHeight * _draggablePanelHeightFraction,
+                                      )
+                                    : BoxConstraints(maxHeight: constraints.maxHeight * 0.62),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: const BorderRadius.vertical(
+                                    top: Radius.circular(24),
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(alpha: 0.12),
+                                      blurRadius: 24,
+                                      offset: const Offset(0, -8),
+                                    ),
+                                  ],
+                                ),
+                                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                                  GestureDetector(
+                                    behavior: HitTestBehavior.opaque,
+                                    onVerticalDragUpdate: _isDraggablePanelStatus
+                                        ? (details) {
+                                            final screenH = constraints.maxHeight;
+                                            setState(() {
+                                              _draggablePanelHeightFraction =
+                                                  (_draggablePanelHeightFraction -
+                                                          details.delta.dy / screenH)
+                                                      .clamp(0.18, 0.78);
+                                            });
+                                          }
+                                        : null,
+                                    child: Container(
+                                      width: double.infinity,
+                                      height: 24,
+                                      alignment: Alignment.center,
+                                      color: Colors.transparent,
+                                      child: Container(
+                                        width: 44,
+                                        height: 4,
+                                        decoration: BoxDecoration(
+                                          color: _isDraggablePanelStatus
+                                              ? const Color(0xFFCBD5E1)
+                                              : JT.border,
+                                          borderRadius: BorderRadius.circular(4),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  Flexible(
+                                    child: SingleChildScrollView(
+                                      physics: const ClampingScrollPhysics(),
+                                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                                      child: _buildSheetBody(driver, seats, fare, otp),
+                                    ),
+                                  ),
+                                ]),
+                              ),
                             ),
                           ],
-                        ),
-                      ),
-                      Align(
-                        alignment: Alignment.bottomCenter,
-                        child: Container(
-                          constraints:
-                              BoxConstraints(maxHeight: sheetMaxHeight),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: const BorderRadius.vertical(
-                              top: Radius.circular(24),
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.12),
-                                blurRadius: 24,
-                                offset: const Offset(0, -8),
-                              ),
-                            ],
-                          ),
-                          child: SingleChildScrollView(
-                            physics: const ClampingScrollPhysics(),
-                            padding:
-                                const EdgeInsets.fromLTRB(16, 12, 16, 24),
-                            child: Column(
-                              children: [
-                                _buildSheetHandle(),
-                                const SizedBox(height: 12),
-                                if (_status == 'searching')
-                                  _buildSearchingHero()
-                                else
-                                  _headerCard(),
-                                const SizedBox(height: 14),
-                                // The animated searching hero above already
-                                // covers this moment on its own — showing
-                                // the 5-stage journey timeline at the same
-                                // time is redundant clutter before a driver
-                                // even exists yet.
-                                if (_status != 'searching') ...[
-                                  _poolProgressCard(),
-                                  const SizedBox(height: 14),
-                                ],
-                                _stopSequenceCard(),
-                                const SizedBox(height: 14),
-                                _seatOverviewCard(seats, fare),
-                                const SizedBox(height: 14),
-                                _otpCard(otp),
-                                if (driver != null) ...[
-                                  const SizedBox(height: 14),
-                                  _driverCard(driver),
-                                ],
-                                const SizedBox(height: 14),
-                                _routeCard(),
-                                if (_error != null &&
-                                    _status != 'cancelled' &&
-                                    _status != 'search_timeout') ...[
-                                  const SizedBox(height: 14),
-                                  _errorCard(),
-                                ],
-                                if (_status == 'matched' ||
-                                    _status == 'picked_up' ||
-                                    _status == 'dropped') ...[
-                                  const SizedBox(height: 14),
-                                  _poolActionsCard(),
-                                ],
-                                const SizedBox(height: 18),
-                                if (_status == 'searching' ||
-                                    _status == 'pending_driver_accept' ||
-                                    _status == 'matched')
-                                  SizedBox(
-                                    height: 56,
-                                    child: ElevatedButton(
-                                      onPressed: _cancelling
-                                          ? null
-                                          : (_status == 'searching' ? _cancelSearch : _openCancellationFlow),
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: Colors.white,
-                                        foregroundColor: Colors.red.shade600,
-                                        elevation: 0,
-                                        side: BorderSide(
-                                          color: Colors.red.shade200,
-                                        ),
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius:
-                                              BorderRadius.circular(16),
-                                        ),
-                                      ),
-                                      child: Text(
-                                        _cancelling
-                                            ? 'Cancelling...'
-                                            : (_status == 'searching' ? 'Cancel Search' : 'Cancel Pool Booking'),
-                                        style: GoogleFonts.poppins(
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                if (_status == 'search_timeout')
-                                  SizedBox(
-                                    height: 56,
-                                    child: ElevatedButton(
-                                      onPressed: _retrying ? null : _tryAgain,
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: JT.primary,
-                                        foregroundColor: Colors.white,
-                                        elevation: 0,
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(16),
-                                        ),
-                                      ),
-                                      child: _retrying
-                                          ? const SizedBox(
-                                              width: 22,
-                                              height: 22,
-                                              child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5),
-                                            )
-                                          : Text(
-                                              'Try Again',
-                                              style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
-                                            ),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  );
-                },
-              ),
-            ),
-    );
-  }
-
-  Widget _headerCard() {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF2D8CFF), Color(0xFF1E6BE6)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(22),
-        boxShadow: [BoxShadow(color: JT.primary.withValues(alpha: 0.24), blurRadius: 20, offset: const Offset(0, 8))],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(_statusTitle, style: GoogleFonts.poppins(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 6),
-          Text(_statusSubtitle, style: GoogleFonts.poppins(color: Colors.white.withValues(alpha: 0.92), fontSize: 13)),
+                        );
+                      },
+                    ),
+                  ),
+          ),
         ],
       ),
     );
   }
 
-  // Same "actively searching" moment as the Bike/Auto tracking screen —
-  // pulsing radar icon, a live pill, and a 3-step Searching/Verifying/
-  // Matching tracker — reskinned for a pooled ride instead of a private one.
-  Widget _buildSearchingHero() {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: JT.surface,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: JT.border),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 12, offset: const Offset(0, 4))],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _buildSheetBody(Map<String, dynamic>? driver, int seats, double fare, String otp) {
+    if (_status == 'cancelled' || _status == 'search_timeout') {
+      final isTimeout = _status == 'search_timeout';
+      return CancelledTripCard(
+        title: _statusTitle,
+        subtitle: _statusSubtitle,
+        primaryButtonLabel: isTimeout
+            ? (_retrying ? 'Retrying...' : 'Try Again')
+            : 'Back to Home',
+        onPrimaryButtonTap: isTimeout
+            ? (_retrying ? () {} : _tryAgain)
+            : () => Navigator.of(context).popUntil((route) => route.isFirst),
+      );
+    }
+
+    final hasPoolActions = _status == 'matched' || _status == 'picked_up' || _status == 'dropped';
+
+    return Column(
+      children: [
+        if (_status == 'searching')
+          _buildSearchingHero(seats)
+        else ...[
+          _buildMatchedHeader(driver, otp),
+          const SizedBox(height: 14),
+          if (driver != null) ...[
+            DriverMatchedCard(
+              name: driver['name']?.toString() ?? 'Driver',
+              rating: driver['rating'],
+              photo: driver['photo']?.toString(),
+              vehicleNum: driver['vehicleNumber']?.toString() ?? '',
+              vehicleModel: driver['vehicleModel']?.toString() ?? '',
+              phone: driver['phone']?.toString(),
+              vehicleIcon: _iconForVehicleLabel(_matchedVehicleLabel()),
+              extraBadge: _seatCountBadge(seats),
+            ),
+            if (_driverSafetyLabel != null) ...[
+              const SizedBox(height: 8),
+              Align(alignment: Alignment.centerLeft, child: _safetyBadge(_driverSafetyLabel!)),
+            ],
+            const SizedBox(height: 14),
+          ],
+          if (_status == 'pending_driver_accept' || _status == 'matched')
+            _buildHeadingToYouPanel()
+          else if (_status == 'picked_up')
+            _buildOnboardPanel(),
+        ],
+        const SizedBox(height: 14),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: () => _openRideDetailsSheet(seats, fare, hasPoolActions),
+            icon: const Icon(Icons.info_outline_rounded, size: 18, color: JT.primary),
+            label: Text('View Ride Details', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, color: JT.primary)),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              side: const BorderSide(color: JT.primary),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            ),
+          ),
+        ),
+        if (_error != null && _status != 'cancelled' && _status != 'search_timeout') ...[
+          const SizedBox(height: 14),
+          _errorCard(),
+        ],
+        const SizedBox(height: 18),
+        if (_status == 'pending_driver_accept' || _status == 'matched')
+          SizedBox(
+            height: 56,
+            child: ElevatedButton(
+              onPressed: _cancelling ? null : _openCancellationFlow,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.white,
+                foregroundColor: Colors.red.shade600,
+                elevation: 0,
+                side: BorderSide(color: Colors.red.shade200),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              ),
+              child: Text(
+                _cancelling ? 'Cancelling...' : 'Cancel Pool Booking',
+                style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  // Opens the seat-overview/route/pool-actions detail that used to sit
+  // permanently stacked in the sheet — collapsing the always-visible matched
+  // view down to header + driver card + one "View Ride Details" button.
+  void _openRideDetailsSheet(int seats, double fare, bool includePoolActions) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => DraggableScrollableSheet(
+        initialChildSize: 0.7,
+        minChildSize: 0.4,
+        maxChildSize: 0.92,
+        expand: false,
+        builder: (context, scrollController) => Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          child: Column(
             children: [
-              _buildSearchPulseIcon(),
-              const SizedBox(width: 10),
+              const SizedBox(height: 12),
+              Container(
+                width: 44,
+                height: 4,
+                decoration: BoxDecoration(color: JT.border, borderRadius: BorderRadius.circular(4)),
+              ),
+              const SizedBox(height: 16),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                child: ListView(
+                  controller: scrollController,
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
                   children: [
-                    Text(
-                      'Finding your Car Share pilot',
-                      style: GoogleFonts.poppins(fontSize: 15, fontWeight: FontWeight.w700, color: JT.textPrimary, height: 1.15),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      "We're matching you with a nearby pooled driver heading your way.",
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: GoogleFonts.poppins(fontSize: 10.5, color: JT.textSecondary, height: 1.25),
-                    ),
+                    Text('Ride Details', style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w600, color: JT.textPrimary)),
+                    const SizedBox(height: 14),
+                    TrackingSectionCard(child: _seatOverviewContent(seats, fare)),
+                    const SizedBox(height: 14),
+                    TrackingSectionCard(child: _routeContent()),
+                    if (includePoolActions) ...[
+                      const SizedBox(height: 14),
+                      TrackingSectionCard(child: _poolActionsContent()),
+                    ],
                   ],
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          _buildSearchLivePill(),
-          const SizedBox(height: 10),
-          _buildSearchStages(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSearchPulseIcon() {
-    return SizedBox(
-      width: 36,
-      height: 36,
-      child: AnimatedBuilder(
-        animation: _pulseCtrl,
-        builder: (context, child) {
-          final t = _pulseCtrl.value;
-          return Stack(
-            alignment: Alignment.center,
-            children: [
-              Transform.scale(
-                scale: 1 + t * 0.6,
-                child: Opacity(
-                  opacity: (1 - t).clamp(0.0, 1.0) * 0.35,
-                  child: Container(
-                    width: 32,
-                    height: 32,
-                    decoration: const BoxDecoration(color: JT.primary, shape: BoxShape.circle),
-                  ),
-                ),
-              ),
-              child!,
-            ],
-          );
-        },
-        child: Container(
-          width: 32,
-          height: 32,
-          decoration: BoxDecoration(color: JT.primary.withValues(alpha: 0.12), shape: BoxShape.circle),
-          child: const Icon(Icons.search_rounded, color: JT.primary, size: 16),
         ),
       ),
     );
   }
 
-  Widget _buildSearchLivePill() {
-    final seats = int.tryParse('${_booking?['seats_requested'] ?? _booking?['seatsRequested'] ?? 1}') ?? 1;
-    return Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: JT.success.withValues(alpha: 0.3)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              AnimatedBuilder(
-                animation: _pulseCtrl,
-                builder: (context, child) => Container(
-                  width: 6,
-                  height: 6,
-                  decoration: BoxDecoration(
-                    color: JT.success.withValues(alpha: 0.5 + _pulseCtrl.value * 0.5),
-                    shape: BoxShape.circle,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 5),
-              Text('Live', style: GoogleFonts.poppins(fontSize: 11, fontWeight: FontWeight.w700, color: JT.success)),
-              const SizedBox(width: 5),
-              Text('|', style: GoogleFonts.poppins(fontSize: 11, color: const Color(0xFFCBD5E1))),
-              const SizedBox(width: 5),
-              Text(
-                '$seats ${seats == 1 ? 'seat' : 'seats'} requested',
-                style: GoogleFonts.poppins(fontSize: 11, fontWeight: FontWeight.w500, color: JT.textSecondary),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
+  // ── Searching state — mirrors TrackingScreen._buildSearchingView ──────────
 
-  Widget _buildSearchStages() {
+  Widget _buildSearchingHero(int seats) {
     final steps = <(IconData, String)>[
       (Icons.groups_rounded, 'Searching\nnearby drivers'),
       (Icons.verified_user_rounded, 'Verifying\navailability'),
       (Icons.task_alt_rounded, 'Matching\nyour seat'),
     ];
+    return SearchingHeroCard(
+      pulseIcon: SearchPulseIcon(controller: _pulseCtrl),
+      title: 'Finding your Car Share pilot',
+      subtitle: "We're matching you with a nearby pooled driver heading your way.",
+      livePill: SearchLivePill(
+        controller: _pulseCtrl,
+        nearbyLabel: '$seats ${seats == 1 ? 'seat' : 'seats'} requested',
+      ),
+      stageStepper: SearchStageStepper(steps: steps, activeStage: _searchStage),
+      primaryInfoCard: _buildSearchFareCard(),
+      secondaryInfoCard: _buildSeatCountCard(seats),
+      cancelButton: _buildPoolSearchCancelButton(),
+      footer: _buildPoolSafetyFooter(),
+    );
+  }
+
+  Widget _buildSearchFareCard() {
+    final fare = double.tryParse('${_booking?['total_fare'] ?? _booking?['totalFare'] ?? 0}') ?? 0;
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+      padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: JT.bgSoft,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: JT.borderLight),
       ),
-      child: Row(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          for (int i = 0; i < steps.length; i++) ...[
-            _buildSearchStageStep(steps[i].$1, steps[i].$2, active: i == _searchStage, done: i < _searchStage),
-            if (i != steps.length - 1) Expanded(child: _buildSearchStageConnector(i < _searchStage)),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSearchStageStep(IconData icon, String label, {required bool active, required bool done}) {
-    final color = done ? JT.success : (active ? JT.primary : const Color(0xFF9CA3AF));
-    final bg = done
-        ? JT.success.withValues(alpha: 0.12)
-        : (active ? JT.primary.withValues(alpha: 0.12) : const Color(0xFFE5E7EB).withValues(alpha: 0.5));
-    return SizedBox(
-      width: 58,
-      child: Column(
-        children: [
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 300),
-            width: active ? 28 : 23,
-            height: active ? 28 : 23,
-            decoration: BoxDecoration(
-              color: bg,
-              shape: BoxShape.circle,
-              border: active ? Border.all(color: color, width: 1.3) : null,
-            ),
-            child: Icon(done ? Icons.check_rounded : icon, size: active ? 14 : 11, color: color),
-          ),
-          const SizedBox(height: 5),
+          Text('Estimated Fare',
+              style: GoogleFonts.poppins(fontSize: 10, fontWeight: FontWeight.w500, color: JT.textSecondary)),
+          const SizedBox(height: 4),
           Text(
-            label,
-            textAlign: TextAlign.center,
-            style: GoogleFonts.poppins(
-              fontSize: 8.5,
-              fontWeight: active ? FontWeight.w600 : FontWeight.w500,
-              color: active || done ? JT.textPrimary : const Color(0xFF9CA3AF),
-              height: 1.15,
-            ),
+            fare > 0 ? '₹${fare.toStringAsFixed(2)}' : '--',
+            style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w800, color: JT.textPrimary),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildSearchStageConnector(bool done) {
+  Widget _buildSeatCountCard(int seats) {
     return Container(
-      margin: const EdgeInsets.only(top: 11, left: 2, right: 2),
-      height: 2,
+      padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: done ? JT.success.withValues(alpha: 0.5) : const Color(0xFFE5E7EB),
-        borderRadius: BorderRadius.circular(1),
+        color: JT.bgSoft,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: JT.borderLight),
       ),
-    );
-  }
-
-  Widget _routeCard() {
-    return _card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _locationRow(Icons.my_location_rounded, 'Pickup', widget.pickupAddress),
-          const Padding(
-            padding: EdgeInsets.only(left: 11, top: 2, bottom: 2),
-            child: SizedBox(height: 18, child: VerticalDivider(width: 2, thickness: 2, color: Color(0xFFE2E8F0))),
+          Text('Seats Requested',
+              style: GoogleFonts.poppins(fontSize: 10, fontWeight: FontWeight.w500, color: JT.textSecondary)),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              const Icon(Icons.event_seat_rounded, size: 16, color: JT.primary),
+              const SizedBox(width: 4),
+              Text('$seats',
+                  style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w800, color: JT.textPrimary)),
+            ],
           ),
-          _locationRow(Icons.location_on_rounded, 'Drop', widget.dropAddress),
         ],
       ),
+    );
+  }
+
+  Widget _buildPoolSearchCancelButton() {
+    return SizedBox(
+      width: double.infinity,
+      child: OutlinedButton.icon(
+        onPressed: _cancelling ? null : _cancelSearch,
+        icon: const Icon(Icons.close_rounded, size: 15, color: Color(0xFFDC2626)),
+        label: Text(
+          _cancelling ? 'Cancelling...' : 'Cancel Search',
+          style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w600, color: const Color(0xFFDC2626)),
+        ),
+        style: OutlinedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          side: BorderSide(color: const Color(0xFFDC2626).withValues(alpha: 0.4)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPoolSafetyFooter() {
+    return Center(
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.lock_outline_rounded, size: 11, color: Color(0xFF9CA3AF)),
+          const SizedBox(width: 5),
+          Text(
+            'Your safety is our priority. All rides are monitored.',
+            style: GoogleFonts.poppins(fontSize: 9.5, color: const Color(0xFF9CA3AF)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Matched/onboard/dropped states ────────────────────────────────────────
+
+  Widget _buildMatchedHeader(Map<String, dynamic>? driver, String otp) {
+    // Same gate as TrackingScreen's "showOtp" — only while the customer still
+    // has to board, not once already picked up / dropped.
+    final showOtp = _status == 'matched';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TripStatusHeader(
+          statusLabel: _statusTitle,
+          showLiveBadge: _status != 'dropped',
+          otp: showOtp ? otp : null,
+        ),
+        const SizedBox(height: 6),
+        Text(
+          _statusSubtitle,
+          style: GoogleFonts.poppins(fontSize: 12, color: JT.textSecondary, height: 1.4),
+        ),
+      ],
+    );
+  }
+
+  Widget _seatCountBadge(int seats) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+      decoration: BoxDecoration(
+        color: JT.primary.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.event_seat_rounded, color: JT.primary, size: 10),
+          const SizedBox(width: 2),
+          Text('$seats ${seats == 1 ? 'seat' : 'seats'}',
+              style: GoogleFonts.poppins(fontSize: 8.5, fontWeight: FontWeight.w600, color: JT.primary)),
+        ],
+      ),
+    );
+  }
+
+  // Pre-pickup summary — mirrors TrackingScreen._buildHeadingToYouPanel,
+  // pointing at the pickup point using the same driver-location + pickup
+  // coordinates already tracked for the live map.
+  Widget _buildHeadingToYouPanel() {
+    final pLat = double.tryParse('${_booking?['pickup_lat'] ?? ''}');
+    final pLng = double.tryParse('${_booking?['pickup_lng'] ?? ''}');
+    double? distKm;
+    if (_driverLatLng != null && pLat != null && pLng != null) {
+      distKm = JT.calculateDistance(_driverLatLng!.latitude, _driverLatLng!.longitude, pLat, pLng);
+    }
+    return RouteProgressPanel(
+      icon: Icons.navigation_rounded,
+      accentColor: JT.primary,
+      label: 'Heading to you',
+      content: Text.rich(
+        TextSpan(
+          style: GoogleFonts.poppins(fontSize: 14.5, fontWeight: FontWeight.w600, color: JT.textPrimary),
+          children: [
+            const TextSpan(text: 'Driver is on the way'),
+            if (distKm != null) TextSpan(text: ' (${_formatDistanceAway(distKm)})'),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Onboard summary — mirrors TrackingScreen._buildInProgressPanel, pointing
+  // at the drop point once the customer has been picked up.
+  Widget _buildOnboardPanel() {
+    final dLat = double.tryParse('${_booking?['drop_lat'] ?? ''}');
+    final dLng = double.tryParse('${_booking?['drop_lng'] ?? ''}');
+    double? distKm;
+    if (_driverLatLng != null && dLat != null && dLng != null) {
+      distKm = JT.calculateDistance(_driverLatLng!.latitude, _driverLatLng!.longitude, dLat, dLng);
+    }
+    return RouteProgressPanel(
+      icon: Icons.navigation_rounded,
+      accentColor: Colors.blue,
+      label: 'Heading to',
+      content: Text(
+        widget.dropAddress,
+        style: GoogleFonts.poppins(fontSize: 15, fontWeight: FontWeight.w600, color: JT.textPrimary),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      distanceBadge: distKm != null
+          ? Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                  color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: JT.border)),
+              child: Text('${distKm.toStringAsFixed(1)} km',
+                  style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w700, color: JT.primary)),
+            )
+          : null,
+      showLiveDot: true,
+      liveDotLabel: 'Ride in progress',
+      trailingIcon: Icons.security_rounded,
+    );
+  }
+
+  // ── Car-share-only content (kept, just rewrapped in TrackingSectionCard) ──
+
+  Widget _routeContent() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _locationRow(Icons.my_location_rounded, 'Pickup', widget.pickupAddress),
+        const Padding(
+          padding: EdgeInsets.only(left: 11, top: 2, bottom: 2),
+          child: SizedBox(height: 18, child: VerticalDivider(width: 2, thickness: 2, color: Color(0xFFE2E8F0))),
+        ),
+        _locationRow(Icons.location_on_rounded, 'Drop', widget.dropAddress),
+      ],
     );
   }
 
   // ignore: unused_element
   Widget _seatCard(int seats, double fare) {
-    return _card(
+    return TrackingSectionCard(
       child: Row(
         children: [
           Expanded(child: _metric('Booked Seats', '$seats')),
@@ -1159,7 +1066,7 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
     final center = _driverLatLng ?? pickup ?? drop;
 
     if (center == null) {
-      return _card(
+      return TrackingSectionCard(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -1177,7 +1084,7 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
     // not a generic colored pin.
     final markers = _liveMapMarkers;
 
-    return _card(
+    return TrackingSectionCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1210,117 +1117,115 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
     );
   }
 
-  Widget _poolActionsCard() {
-    return _card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Pool Actions', style: GoogleFonts.poppins(fontSize: 15, fontWeight: FontWeight.w600, color: JT.textPrimary)),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
+  Widget _poolActionsContent() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Pool Actions', style: GoogleFonts.poppins(fontSize: 15, fontWeight: FontWeight.w600, color: JT.textPrimary)),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            _miniAction(
+              icon: Icons.chat_bubble_outline_rounded,
+              label: 'Chat Driver',
+              onTap: _openPoolChat,
+            ),
+            if (_status == 'matched' || _status == 'picked_up')
               _miniAction(
-                icon: Icons.chat_bubble_outline_rounded,
-                label: 'Chat Driver',
-                onTap: _openPoolChat,
+                icon: Icons.call_rounded,
+                label: 'Call Driver',
+                onTap: _startPoolCall,
               ),
-              if (_status == 'matched' || _status == 'picked_up')
-                _miniAction(
-                  icon: Icons.call_rounded,
-                  label: 'Call Driver',
-                  onTap: _startPoolCall,
+            _miniAction(
+              icon: Icons.people_alt_rounded,
+              label: 'Co-Passengers',
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => CoPassengerScreen(
+                    title: 'Co-Passengers',
+                    referenceId: widget.requestId,
+                    isOutstation: false,
+                  ),
                 ),
+              ),
+            ),
+            _miniAction(
+              icon: Icons.report_gmailerrorred_rounded,
+              label: 'Report Issue',
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => ReportIssueScreen(
+                    referenceId: widget.requestId,
+                    module: 'local_pool',
+                    referenceType: 'request',
+                    title: 'Report Pool Issue',
+                  ),
+                ),
+              ),
+            ),
+            _miniAction(
+              icon: Icons.support_agent_rounded,
+              label: 'Support',
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => PoolSupportScreen(
+                    module: 'local_pool',
+                    referenceId: widget.requestId,
+                    title: 'Pool Support',
+                  ),
+                ),
+              ),
+            ),
+            _miniAction(
+              icon: Icons.shield_outlined,
+              label: 'Safety',
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => PoolSafetyScreen(
+                    title: 'Pool Safety',
+                    module: 'local_pool',
+                    referenceId: widget.requestId,
+                    tripId: widget.requestId,
+                    driverName: _booking?['driver_name']?.toString() ?? '',
+                    vehicleInfo: '${_booking?['vehicle_model'] ?? ''} ${_booking?['vehicle_number'] ?? ''}'.trim(),
+                    liveStatus: _status,
+                    blockedUserId: _booking?['driver_id']?.toString(),
+                  ),
+                ),
+              ),
+            ),
+            _miniAction(
+              icon: Icons.timeline_rounded,
+              label: 'Dispute',
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => PoolDisputeTimelineScreen(
+                    title: 'Dispute Timeline',
+                    module: 'local_pool',
+                    referenceId: widget.requestId,
+                  ),
+                ),
+              ),
+            ),
+            if (_status == 'dropped')
               _miniAction(
-                icon: Icons.people_alt_rounded,
-                label: 'Co-Passengers',
+                icon: Icons.star_rounded,
+                label: 'Rate Driver',
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute(
-                    builder: (_) => CoPassengerScreen(
-                      title: 'Co-Passengers',
+                    builder: (_) => PoolRatingScreen(
+                      title: 'Rate Pool Driver',
                       referenceId: widget.requestId,
                       isOutstation: false,
                     ),
                   ),
                 ),
               ),
-              _miniAction(
-                icon: Icons.report_gmailerrorred_rounded,
-                label: 'Report Issue',
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => ReportIssueScreen(
-                      referenceId: widget.requestId,
-                      module: 'local_pool',
-                      referenceType: 'request',
-                      title: 'Report Pool Issue',
-                    ),
-                  ),
-                ),
-              ),
-              _miniAction(
-                icon: Icons.support_agent_rounded,
-                label: 'Support',
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => PoolSupportScreen(
-                      module: 'local_pool',
-                      referenceId: widget.requestId,
-                      title: 'Pool Support',
-                    ),
-                  ),
-                ),
-              ),
-              _miniAction(
-                icon: Icons.shield_outlined,
-                label: 'Safety',
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => PoolSafetyScreen(
-                      title: 'Pool Safety',
-                      module: 'local_pool',
-                      referenceId: widget.requestId,
-                      tripId: widget.requestId,
-                      driverName: _booking?['driver_name']?.toString() ?? '',
-                      vehicleInfo: '${_booking?['vehicle_model'] ?? ''} ${_booking?['vehicle_number'] ?? ''}'.trim(),
-                      liveStatus: _status,
-                      blockedUserId: _booking?['driver_id']?.toString(),
-                    ),
-                  ),
-                ),
-              ),
-              _miniAction(
-                icon: Icons.timeline_rounded,
-                label: 'Dispute',
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => PoolDisputeTimelineScreen(
-                      title: 'Dispute Timeline',
-                      module: 'local_pool',
-                      referenceId: widget.requestId,
-                    ),
-                  ),
-                ),
-              ),
-              if (_status == 'dropped')
-                _miniAction(
-                  icon: Icons.star_rounded,
-                  label: 'Rate Driver',
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => PoolRatingScreen(
-                        title: 'Rate Pool Driver',
-                        referenceId: widget.requestId,
-                        isOutstation: false,
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ],
-      ),
+          ],
+        ),
+      ],
     );
   }
 
@@ -1343,70 +1248,6 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
             Text(label, style: GoogleFonts.poppins(fontSize: 12.5, fontWeight: FontWeight.w600, color: JT.textPrimary)),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _otpCard(String otp) {
-    return _card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Boarding OTP', style: GoogleFonts.poppins(fontSize: 13, color: JT.textSecondary, fontWeight: FontWeight.w500)),
-          const SizedBox(height: 8),
-          Text(otp, style: GoogleFonts.poppins(fontSize: 30, fontWeight: FontWeight.w700, color: JT.primary, letterSpacing: 8)),
-          const SizedBox(height: 6),
-          Text('Share this only when the driver reaches your pickup point.', style: GoogleFonts.poppins(fontSize: 12, color: JT.textSecondary)),
-        ],
-      ),
-    );
-  }
-
-  Widget _driverCard(Map<String, dynamic> driver) {
-    final safety = _booking?['driverSafety'] is Map<String, dynamic>
-        ? _booking!['driverSafety'] as Map<String, dynamic>
-        : null;
-    final safetyLabel = safety?['badgeLabel']?.toString();
-    return _card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Assigned Driver', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, color: JT.textPrimary)),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              CircleAvatar(
-                radius: 24,
-                backgroundColor: JT.primary.withValues(alpha: 0.1),
-                child: Text(
-                  (driver['name']?.toString().isNotEmpty == true) ? driver['name'].toString()[0].toUpperCase() : 'D',
-                  style: GoogleFonts.poppins(color: JT.primary, fontWeight: FontWeight.w700),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(driver['name']?.toString() ?? 'Driver', style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
-                        ),
-                        if (safetyLabel != null) _safetyBadge(safetyLabel),
-                      ],
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      '${driver['vehicleModel'] ?? ''} · ${driver['vehicleNumber'] ?? ''}',
-                      style: GoogleFonts.poppins(fontSize: 12, color: JT.textSecondary),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ],
       ),
     );
   }
@@ -1443,7 +1284,7 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
     );
   }
 
-  Widget _seatOverviewCard(int seats, double fare) {
+  Widget _seatOverviewContent(int seats, double fare) {
     final liveAvailable =
         int.tryParse('${_seatState?['availableSeats'] ?? _booking?['available_seats'] ?? 0}') ?? 0;
     final maxSeats =
@@ -1451,49 +1292,47 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
             (seats + liveAvailable);
     final occupiedSeats = (maxSeats - liveAvailable).clamp(0, maxSeats);
 
-    return _card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(child: _metric('Booked Seats', '$seats')),
-              Expanded(child: _metric('Total Fare', '₹${fare.toStringAsFixed(0)}')),
-              Expanded(child: _metric('Live Seats', '$liveAvailable')),
-            ],
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(child: _metric('Booked Seats', '$seats')),
+            Expanded(child: _metric('Total Fare', '₹${fare.toStringAsFixed(0)}')),
+            Expanded(child: _metric('Live Seats', '$liveAvailable')),
+          ],
+        ),
+        const SizedBox(height: 16),
+        Text(
+          'Live Seat View',
+          style: GoogleFonts.poppins(
+            fontSize: 13,
+            color: JT.textPrimary,
+            fontWeight: FontWeight.w600,
           ),
-          const SizedBox(height: 16),
-          Text(
-            'Live Seat View',
-            style: GoogleFonts.poppins(
-              fontSize: 13,
-              color: JT.textPrimary,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: List.generate(maxSeats, (index) {
-              final isBooked = index < occupiedSeats;
-              return _seatNode(
-                label: 'S${index + 1}',
-                color: isBooked ? JT.primary : JT.success,
-                subtitle: isBooked ? 'Booked' : 'Open',
-              );
-            }),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(child: _seatLegend('Booked / reserved', JT.primary)),
-              const SizedBox(width: 10),
-              Expanded(child: _seatLegend('Available now', JT.success)),
-            ],
-          ),
-        ],
-      ),
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: List.generate(maxSeats, (index) {
+            final isBooked = index < occupiedSeats;
+            return _seatNode(
+              label: 'S${index + 1}',
+              color: isBooked ? JT.primary : JT.success,
+              subtitle: isBooked ? 'Booked' : 'Open',
+            );
+          }),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(child: _seatLegend('Booked / reserved', JT.primary)),
+            const SizedBox(width: 10),
+            Expanded(child: _seatLegend('Available now', JT.success)),
+          ],
+        ),
+      ],
     );
   }
 
@@ -1603,19 +1442,6 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
           ),
         ),
       ],
-    );
-  }
-
-  Widget _card({required Widget child}) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 10, offset: const Offset(0, 4))],
-      ),
-      child: child,
     );
   }
 }

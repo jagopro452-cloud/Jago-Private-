@@ -4,7 +4,6 @@ import 'dart:math';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../../core/map_night_style.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:jago_shared_core/jago_shared_core.dart';
@@ -17,6 +16,11 @@ import '../../config/jago_theme.dart';
 import '../../services/auth_service.dart';
 import '../../services/error_reporting.dart';
 import '../../services/vehicle_status_service.dart';
+import '../../widgets/booking/address_row.dart';
+import '../../widgets/booking/booking_map_shell.dart';
+import '../../widgets/booking/inline_info_card.dart';
+import '../../widgets/booking/shared_ride_card.dart';
+import '../car_share/car_share_options_screen.dart';
 import '../tracking/tracking_screen.dart';
 
 class BookingScreen extends StatefulWidget {
@@ -1374,265 +1378,87 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
               ? screenHeight * 0.5
               : 360.0;
 
-          return Stack(
-            children: [
-              Positioned.fill(
-                child: GoogleMap(
-                  initialCameraPosition: CameraPosition(target: _pickupLatLng, zoom: 14),
-                  style: Theme.of(context).brightness == Brightness.dark ? kMapNightStyle : null,
-                  onMapCreated: (c) {
-                    _mapController = c;
-                    _fitMapToRoute();
-                  },
-                  markers: {
-                    Marker(
-                      markerId: const MarkerId('pickup'),
-                      position: _pickupLatLng,
-                      anchor: _pickupMarkerAnchor,
-                      icon: _pickupMarkerIcon ??
-                          BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
-                    ),
-                    Marker(
-                      markerId: const MarkerId('destination'),
-                      position: _destLatLng,
-                      anchor: _dropMarkerAnchor,
-                      icon: _dropMarkerIcon ??
-                          BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
-                    ),
-                    ..._nearbyDriverMarkers,
-                  },
-                  polylines: _polylines,
-                  zoomControlsEnabled: false,
-                  myLocationButtonEnabled: false,
-                  mapToolbarEnabled: false,
-                  compassEnabled: false,
-                  padding: EdgeInsets.only(
-                    bottom: sheetMaxHeight + 20,
-                    top: 104,
-                  ),
+          // Mirrors the try/catch that used to wrap the inline Builder around
+          // _buildStepBody(...) directly in the Stack — kept here (evaluated
+          // before BookingMapShell is constructed) so a construction-time
+          // exception in a step body is still caught and reported exactly as
+          // before, rather than crashing build().
+          Widget stepBodyContent;
+          try {
+            stepBodyContent = _buildStepBody(statuses, visibleFares);
+          } catch (e, st) {
+            reportSilentFailure('BookingScreen._buildStepBody', e, st);
+            stepBodyContent = SingleChildScrollView(
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEF2F2),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFFFCA5A5)),
+                ),
+                child: Text(
+                  'Could not load this step:\n$e',
+                  style: const TextStyle(color: Color(0xFFDC2626), fontSize: 12),
                 ),
               ),
-              Positioned(
-                right: 16,
-                bottom: sheetMaxHeight + 56,
-                child: GestureDetector(
-                  onTap: () => _fitMapToRoute(),
-                  child: Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      shape: BoxShape.circle,
-                      boxShadow: JT.cardShadow,
-                    ),
-                    child: const Icon(Icons.my_location_rounded, color: JT.primary, size: 20),
-                  ),
-                ),
+            );
+          }
+
+          return BookingMapShell(
+            pickupLatLng: _pickupLatLng,
+            markers: {
+              Marker(
+                markerId: const MarkerId('pickup'),
+                position: _pickupLatLng,
+                anchor: _pickupMarkerAnchor,
+                icon: _pickupMarkerIcon ??
+                    BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
               ),
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                child: SafeArea(
-                  bottom: false,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            GestureDetector(
-                              onTap: () => Navigator.pop(context),
-                              child: Container(
-                                width: 48,
-                                height: 48,
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(16),
-                                  boxShadow: JT.cardShadow,
-                                ),
-                                child: const Icon(Icons.arrow_back_rounded, color: JT.textPrimary),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(18),
-                                  boxShadow: JT.cardShadow,
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      _bookingStepTitle,
-                                      style: GoogleFonts.poppins(
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.w600,
-                                        color: JT.textPrimary,
-                                      ),
-                                    ),
-                                    if (_bookingStepSubtitle.isNotEmpty) ...[
-                                      const SizedBox(height: 3),
-                                      Text(
-                                        _bookingStepSubtitle,
-                                        style: GoogleFonts.poppins(
-                                          fontSize: 11,
-                                          color: JT.textSecondary,
-                                        ),
-                                      ),
-                                    ],
-                                    if (_bookingStep == _BookingStep.farePayment) ...[
-                                      const SizedBox(height: 8),
-                                      _buildForWhomToggle(),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        _buildStepProgressBar(),
-                      ],
-                    ),
-                  ),
-                ),
+              Marker(
+                markerId: const MarkerId('destination'),
+                position: _destLatLng,
+                anchor: _dropMarkerAnchor,
+                icon: _dropMarkerIcon ??
+                    BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
               ),
-              Align(
-                alignment: Alignment.bottomCenter,
-                child: Container(
-                  constraints: BoxConstraints(maxHeight: sheetMaxHeight),
-                  decoration: const BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-                    boxShadow: [BoxShadow(color: Color(0x22000000), blurRadius: 24)],
-                  ),
-                  child: SafeArea(
-                    top: false,
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Center(child: _buildSheetHandle()),
-                          const SizedBox(height: 16),
-                          Expanded(
-                            child: Builder(builder: (context) {
-                              try {
-                                return _buildStepBody(statuses, visibleFares);
-                              } catch (e, st) {
-                                reportSilentFailure('BookingScreen._buildStepBody', e, st);
-                                return SingleChildScrollView(
-                                  child: Container(
-                                    padding: const EdgeInsets.all(16),
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFFFEF2F2),
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(color: const Color(0xFFFCA5A5)),
-                                    ),
-                                    child: Text(
-                                      'Could not load this step:\n$e',
-                                      style: const TextStyle(color: Color(0xFFDC2626), fontSize: 12),
-                                    ),
-                                  ),
-                                );
-                              }
-                            }),
-                          ),
-                          const SizedBox(height: 16),
-                          SizedBox(
-                            width: double.infinity,
-                            height: 56,
-                            child: ElevatedButton(
-                              onPressed: _loading
-                                  ? null
-                                  : () => _advanceBookingStep(
-                                        canContinueFromVehicle:
-                                            canContinueFromVehicle,
-                                        canContinueFromFare:
-                                            canContinueFromFare,
-                                      ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: JT.primary,
-                                foregroundColor: Colors.white,
-                                disabledBackgroundColor: JT.border,
-                                disabledForegroundColor: JT.textSecondary,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(16),
-                                ),
-                                elevation: 0,
-                              ),
-                              child: AnimatedSwitcher(
-                                duration: const Duration(milliseconds: 220),
-                                transitionBuilder: (child, animation) =>
-                                    FadeTransition(
-                                  opacity: animation,
-                                  child: ScaleTransition(
-                                    scale: Tween<double>(
-                                      begin: 0.98,
-                                      end: 1,
-                                    ).animate(animation),
-                                    child: child,
-                                  ),
-                                ),
-                                child: _loading
-                                    ? const SizedBox(
-                                        key: ValueKey('booking_loading'),
-                                        width: 22,
-                                        height: 22,
-                                        child: CircularProgressIndicator(
-                                          color: Colors.white,
-                                          strokeWidth: 2.4,
-                                        ),
-                                      )
-                                    : Row(
-                                        key: ValueKey('booking_${_bookingStep.name}'),
-                                        mainAxisAlignment: MainAxisAlignment.center,
-                                        children: [
-                                          Text(
-                                            _bookingStepCta(
-                                              canContinueFromVehicle:
-                                                  canContinueFromVehicle,
-                                              canContinueFromFare:
-                                                  canContinueFromFare,
-                                            ),
-                                            style: GoogleFonts.poppins(
-                                              fontSize: 16,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
-                                          if (_bookingStep == _BookingStep.farePayment &&
-                                              canContinueFromFare) ...[
-                                            const SizedBox(width: 8),
-                                            const Icon(Icons.arrow_forward_rounded, size: 18),
-                                          ],
-                                        ],
-                                      ),
-                              ),
-                            ),
-                          ),
-                          if (_bookingStep == _BookingStep.farePayment && !_bookForSomeone) ...[
-                            const SizedBox(height: 10),
-                            Center(
-                              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                                Icon(Icons.lock_rounded, size: 12, color: JT.textSecondary),
-                                const SizedBox(width: 4),
-                                Text('Secure payments. Your data is protected.',
-                                    style: GoogleFonts.poppins(fontSize: 11, color: JT.textSecondary)),
-                              ]),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ],
+              ..._nearbyDriverMarkers,
+            },
+            polylines: _polylines,
+            onMapCreated: (c) {
+              _mapController = c;
+              _fitMapToRoute();
+            },
+            onRecenter: () => _fitMapToRoute(),
+            title: _bookingStepTitle,
+            subtitle: _bookingStepSubtitle,
+            headerExtra: _bookingStep == _BookingStep.farePayment ? _buildForWhomToggle() : null,
+            totalSteps: _BookingStep.values.length,
+            currentStep: _BookingStep.values.indexOf(_bookingStep),
+            sheetMaxHeight: sheetMaxHeight,
+            stepBody: stepBodyContent,
+            stepBodyKey: _bookingStep.name,
+            ctaLabel: _bookingStepCta(
+              canContinueFromVehicle: canContinueFromVehicle,
+              canContinueFromFare: canContinueFromFare,
+            ),
+            onCtaPressed: () => _advanceBookingStep(
+              canContinueFromVehicle: canContinueFromVehicle,
+              canContinueFromFare: canContinueFromFare,
+            ),
+            ctaLoading: _loading,
+            ctaTrailingIcon: _bookingStep == _BookingStep.farePayment && canContinueFromFare
+                ? const Icon(Icons.arrow_forward_rounded, size: 18)
+                : null,
+            belowCta: _bookingStep == _BookingStep.farePayment && !_bookForSomeone
+                ? Center(
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.lock_rounded, size: 12, color: JT.textSecondary),
+                      const SizedBox(width: 4),
+                      Text('Secure payments. Your data is protected.',
+                          style: GoogleFonts.poppins(fontSize: 11, color: JT.textSecondary)),
+                    ]),
+                  )
+                : null,
           );
         },
       ),
@@ -1710,54 +1536,6 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
     }
   }
 
-  Widget _buildSheetHandle() {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 220),
-      width: 44,
-      height: 4,
-      decoration: BoxDecoration(
-        color: JT.border,
-        borderRadius: BorderRadius.circular(4),
-      ),
-    );
-  }
-
-  Widget _buildStepProgressBar() {
-    final steps = _BookingStep.values;
-    final current = steps.indexOf(_bookingStep);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: JT.cardShadow,
-      ),
-      child: Row(
-        children: List.generate(steps.length, (index) {
-          final isDone = index < current;
-          final isActive = index == current;
-          return Expanded(
-            child: Row(
-              children: [
-                Expanded(
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 220),
-                    height: 6,
-                    decoration: BoxDecoration(
-                      color: isDone || isActive ? JT.primary : JT.border,
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                  ),
-                ),
-                if (index < steps.length - 1) const SizedBox(width: 6),
-              ],
-            ),
-          );
-        }),
-      ),
-    );
-  }
-
   Widget _buildStepBody(
     Map<String, VehicleStatus> statuses,
     List<MapEntry<int, Map<String, dynamic>>> visibleFares,
@@ -1779,14 +1557,14 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
                 ),
                 child: Column(
                   children: [
-                    _addressRow(Icons.circle_rounded, JT.primary, widget.pickup),
+                    AddressRow(icon: Icons.circle_rounded, color: JT.primary, text: widget.pickup, isPickup: true),
                     const Divider(height: 1, indent: 52, endIndent: 16),
-                    _addressRow(Icons.location_on_rounded, JT.error, widget.destination),
+                    AddressRow(icon: Icons.location_on_rounded, color: JT.error, text: widget.destination, isPickup: false),
                   ],
                 ),
               ),
               const SizedBox(height: 16),
-              _buildInlineInfoCard(
+              InlineInfoCard(
                 icon: Icons.route_rounded,
                 title: '${_distanceKm.toStringAsFixed(1)} km route',
                 subtitle: 'Map stays visible while you choose the ride.',
@@ -1815,6 +1593,29 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
               ),
               const SizedBox(height: 12),
               _buildVehicleSelector(statuses),
+              if (widget.category != 'parcel' && widget.destLat != 0 && widget.destLng != 0) ...[
+                const SizedBox(height: 4),
+                SharedRideCard(
+                  pickupLat: widget.pickupLat,
+                  pickupLng: widget.pickupLng,
+                  dropLat: widget.destLat,
+                  dropLng: widget.destLng,
+                  comparisonFare: _fare?['estimatedFare'] != null ? (_fare!['estimatedFare'] as num).toDouble() : null,
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => CarShareOptionsScreen(
+                        pickupAddress: widget.pickup,
+                        pickupLat: widget.pickupLat,
+                        pickupLng: widget.pickupLng,
+                        dropAddress: widget.destination,
+                        dropLat: widget.destLat,
+                        dropLng: widget.destLng,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         );
@@ -1846,19 +1647,19 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
             children: [
               _buildStepSectionTitle('Trip summary'),
               const SizedBox(height: 12),
-              _buildInlineInfoCard(
+              InlineInfoCard(
                 icon: _iconForVehicle(_vehicleName),
                 title: _vehicleName,
                 subtitle: 'Estimated fare ₹${_finalFare.toStringAsFixed(0)} • ${_paymentMethod.toUpperCase()}',
               ),
               const SizedBox(height: 12),
-              _buildInlineInfoCard(
+              InlineInfoCard(
                 icon: Icons.alt_route_rounded,
                 title: _shortLocation(widget.pickup),
                 subtitle: _shortLocation(widget.destination),
               ),
               const SizedBox(height: 12),
-              _buildInlineInfoCard(
+              InlineInfoCard(
                 icon: _bookForSomeone ? Icons.person_rounded : Icons.person_outline_rounded,
                 title: _bookForSomeone
                     ? (_passengerNameCtrl.text.trim().isEmpty ? 'Ride for someone else' : _passengerNameCtrl.text.trim())
@@ -1880,60 +1681,6 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
         fontSize: 16,
         fontWeight: FontWeight.w600,
         color: JT.textPrimary,
-      ),
-    );
-  }
-
-  Widget _buildInlineInfoCard({
-    required IconData icon,
-    required String title,
-    required String subtitle,
-  }) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: JT.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: JT.border),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: JT.primary.withValues(alpha: 0.08),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(icon, color: JT.primary, size: 20),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: GoogleFonts.poppins(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: JT.textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  subtitle,
-                  style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    color: JT.textSecondary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -2304,34 +2051,6 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
           ],
         ),
       ),
-    );
-  }
-
-  Widget _addressRow(IconData icon, Color color, String text, [Color? textColor]) {
-    final tColor = textColor ?? JT.textPrimary;
-    final isPickup = icon == Icons.circle_rounded;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-        Container(
-          width: 28, height: 28,
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.1),
-            shape: BoxShape.circle,
-            border: Border.all(color: color.withValues(alpha: 0.3), width: 1.5),
-          ),
-          child: Icon(icon, color: color, size: isPickup ? 10 : 16),
-        ),
-        const SizedBox(width: 12),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(isPickup ? 'PICKUP' : 'DROP',
-            style: TextStyle(fontSize: 9, fontWeight: FontWeight.w500, color: color.withValues(alpha: 0.8), letterSpacing: 0.8)),
-          const SizedBox(height: 2),
-          Text(text,
-            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: tColor),
-            maxLines: 1, overflow: TextOverflow.ellipsis),
-        ])),
-      ]),
     );
   }
 

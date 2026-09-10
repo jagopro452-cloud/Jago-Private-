@@ -45,7 +45,13 @@ export default function DriverVerificationPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/drivers/pending-verification", activeTab] });
       toast({ title: "Document status updated" });
-    }
+    },
+    // Without this, a failed request (e.g. a validation error) silently did
+    // nothing — no toast, no indication anything went wrong — the admin
+    // just saw the click have no effect.
+    onError: (error: any) => {
+      toast({ title: "Could not update document status", description: error?.message || "Please try again.", variant: "destructive" });
+    },
   });
 
   const verifyDriverMutation = useMutation({
@@ -55,7 +61,13 @@ export default function DriverVerificationPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/drivers/pending-verification", activeTab] });
       toast({ title: "Driver verification status updated" });
-    }
+    },
+    // Same fix — this is what silently swallowed the "missing documents" /
+    // "vehicle registration incomplete" guard errors from the backend,
+    // making Approve look broken when it was correctly blocking approval.
+    onError: (error: any) => {
+      toast({ title: "Could not update driver status", description: error?.message || "Please try again.", variant: "destructive" });
+    },
   });
 
   const serviceActivationMutation = useMutation({
@@ -65,7 +77,10 @@ export default function DriverVerificationPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/drivers/pending-verification", activeTab] });
       toast({ title: "Driver service activation updated" });
-    }
+    },
+    onError: (error: any) => {
+      toast({ title: "Could not update service activation", description: error?.message || "Please try again.", variant: "destructive" });
+    },
   });
 
   const handleDocReview = (driverId: string, docType: string, status: string) => {
