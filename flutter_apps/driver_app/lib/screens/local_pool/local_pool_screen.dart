@@ -473,19 +473,89 @@ class _LocalPoolScreenState extends State<LocalPoolScreen> {
     _otpCtrl.clear();
     final otp = await showDialog<String>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Enter Boarding OTP'),
-        content: TextField(
-          controller: _otpCtrl,
-          keyboardType: TextInputType.number,
-          maxLength: 4,
-          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-          decoration: const InputDecoration(hintText: '4-digit OTP'),
+      builder: (_) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 28),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: JT.primary.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.lock_rounded, color: JT.primary, size: 24),
+              ),
+              const SizedBox(height: 16),
+              Text('Enter Boarding OTP',
+                  style: GoogleFonts.poppins(fontSize: 17, fontWeight: FontWeight.w700, color: JT.textPrimary)),
+              const SizedBox(height: 6),
+              Text('Ask the passenger for the 4-digit secure PIN shown on their app.',
+                  style: GoogleFonts.poppins(fontSize: 12.5, color: JT.textSecondary)),
+              const SizedBox(height: 20),
+              TextField(
+                controller: _otpCtrl,
+                autofocus: true,
+                keyboardType: TextInputType.number,
+                maxLength: 4,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                style: GoogleFonts.poppins(fontSize: 22, fontWeight: FontWeight.w700, letterSpacing: 6),
+                textAlign: TextAlign.center,
+                decoration: InputDecoration(
+                  counterText: '',
+                  hintText: '••••',
+                  hintStyle: GoogleFonts.poppins(fontSize: 22, color: JT.textSecondary, letterSpacing: 6),
+                  filled: true,
+                  fillColor: JT.bgSoft,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide.none,
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: JT.primary, width: 1.5),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        side: const BorderSide(color: JT.border),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      ),
+                      child: Text('Cancel',
+                          style: GoogleFonts.poppins(fontWeight: FontWeight.w600, color: JT.textPrimary)),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.pop(context, _otpCtrl.text.trim()),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: JT.primary,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      ),
+                      child: Text('Verify',
+                          style: GoogleFonts.poppins(fontWeight: FontWeight.w600, color: Colors.white)),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          ElevatedButton(onPressed: () => Navigator.pop(context, _otpCtrl.text.trim()), child: const Text('Verify')),
-        ],
       ),
     );
     if (otp == null || otp.isEmpty) return;
@@ -781,9 +851,11 @@ class _LocalPoolScreenState extends State<LocalPoolScreen> {
 
     final (maxSeats, occupied) = _seatCounts;
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(24),
-      child: Stack(
+    // No rounding here — this hero fills the entire body edge-to-edge (see
+    // DraggableMapSheet's Positioned.fill), so a rounded-rect clip on all
+    // four corners just exposed the Scaffold's background color in each
+    // corner instead of giving a true full-screen map.
+    return Stack(
         children: [
           Positioned.fill(
             child: GoogleMap(
@@ -812,8 +884,7 @@ class _LocalPoolScreenState extends State<LocalPoolScreen> {
             ),
           ),
         ],
-      ),
-    );
+      );
   }
 
   @override

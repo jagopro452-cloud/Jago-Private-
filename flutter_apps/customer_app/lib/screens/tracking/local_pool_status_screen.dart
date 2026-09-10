@@ -573,7 +573,12 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
     final otp = _booking?['boarding_otp']?.toString() ?? _booking?['boardingOtp']?.toString() ?? '----';
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      // Matches TrackingScreen's (Bike/Auto) page frame: a soft page
+      // background behind a white, top-rounded content area — instead of a
+      // flat white Scaffold with a small map card floating in the middle of
+      // it, which is what previously left large empty margins around the
+      // map on this screen.
+      backgroundColor: const Color(0xFFF0F7FF),
       body: Column(
         children: [
           TrackingHeaderBar(
@@ -585,92 +590,98 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
           Expanded(
             child: _loading
                 ? _buildLoadingState()
-                : RefreshIndicator(
-                    onRefresh: _load,
-                    color: JT.primary,
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        return Stack(
-                          children: [
-                            Positioned.fill(
-                              child: ListView(
-                                physics: const AlwaysScrollableScrollPhysics(),
-                                children: [
-                                  SizedBox(
-                                    height: constraints.maxHeight,
-                                    child: _liveMapCard(),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            Align(
-                              alignment: Alignment.bottomCenter,
-                              child: Container(
-                                constraints: _isDraggablePanelStatus
-                                    ? BoxConstraints(
-                                        minHeight: constraints.maxHeight * _draggablePanelHeightFraction,
-                                        maxHeight: constraints.maxHeight * _draggablePanelHeightFraction,
-                                      )
-                                    : BoxConstraints(maxHeight: constraints.maxHeight * 0.62),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: const BorderRadius.vertical(
-                                    top: Radius.circular(24),
-                                  ),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withValues(alpha: 0.12),
-                                      blurRadius: 24,
-                                      offset: const Offset(0, -8),
+                : Container(
+                    decoration: const BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
+                      // No RefreshIndicator here — a full-bleed GoogleMap isn't
+                      // scrollable, and its own vertical-pan gesture (panning
+                      // the map) would fight a pull-to-refresh gesture anyway.
+                      // The 8s poller (_poller) and socket listeners already
+                      // keep this screen live, matching TrackingScreen's
+                      // reference behavior for its own full-bleed map.
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          return Stack(
+                            children: [
+                              // Edge-to-edge live map — no card wrapper, no fixed
+                              // height, so it fills the entire body instead of
+                              // sitting inside a small bordered card.
+                              Positioned.fill(child: _buildTrackingMap()),
+                              Positioned(
+                                  bottom: 0,
+                                  left: 0,
+                                  right: 0,
+                                  child: Container(
+                                    constraints: _isDraggablePanelStatus
+                                        ? BoxConstraints(
+                                            minHeight: constraints.maxHeight * _draggablePanelHeightFraction,
+                                            maxHeight: constraints.maxHeight * _draggablePanelHeightFraction,
+                                          )
+                                        : BoxConstraints(maxHeight: constraints.maxHeight * 0.62),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: const BorderRadius.vertical(
+                                        top: Radius.circular(24),
+                                      ),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withValues(alpha: 0.12),
+                                          blurRadius: 24,
+                                          offset: const Offset(0, -8),
+                                        ),
+                                      ],
                                     ),
-                                  ],
-                                ),
-                                child: Column(mainAxisSize: MainAxisSize.min, children: [
-                                  GestureDetector(
-                                    behavior: HitTestBehavior.opaque,
-                                    onVerticalDragUpdate: _isDraggablePanelStatus
-                                        ? (details) {
-                                            final screenH = constraints.maxHeight;
-                                            setState(() {
-                                              _draggablePanelHeightFraction =
-                                                  (_draggablePanelHeightFraction -
-                                                          details.delta.dy / screenH)
-                                                      .clamp(0.18, 0.78);
-                                            });
-                                          }
-                                        : null,
-                                    child: Container(
-                                      width: double.infinity,
-                                      height: 24,
-                                      alignment: Alignment.center,
-                                      color: Colors.transparent,
-                                      child: Container(
-                                        width: 44,
-                                        height: 4,
-                                        decoration: BoxDecoration(
-                                          color: _isDraggablePanelStatus
-                                              ? const Color(0xFFCBD5E1)
-                                              : JT.border,
-                                          borderRadius: BorderRadius.circular(4),
+                                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                                      GestureDetector(
+                                        behavior: HitTestBehavior.opaque,
+                                        onVerticalDragUpdate: _isDraggablePanelStatus
+                                            ? (details) {
+                                                final screenH = constraints.maxHeight;
+                                                setState(() {
+                                                  _draggablePanelHeightFraction =
+                                                      (_draggablePanelHeightFraction -
+                                                              details.delta.dy / screenH)
+                                                          .clamp(0.18, 0.78);
+                                                });
+                                              }
+                                            : null,
+                                        child: Container(
+                                          width: double.infinity,
+                                          height: 24,
+                                          alignment: Alignment.center,
+                                          color: Colors.transparent,
+                                          child: Container(
+                                            width: 44,
+                                            height: 4,
+                                            decoration: BoxDecoration(
+                                              color: _isDraggablePanelStatus
+                                                  ? const Color(0xFFCBD5E1)
+                                                  : JT.border,
+                                              borderRadius: BorderRadius.circular(4),
+                                            ),
+                                          ),
                                         ),
                                       ),
-                                    ),
+                                      Flexible(
+                                        child: SingleChildScrollView(
+                                          physics: const ClampingScrollPhysics(),
+                                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                                          child: _buildSheetBody(driver, seats, fare, otp),
+                                        ),
+                                      ),
+                                    ]),
                                   ),
-                                  Flexible(
-                                    child: SingleChildScrollView(
-                                      physics: const ClampingScrollPhysics(),
-                                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-                                      child: _buildSheetBody(driver, seats, fare, otp),
-                                    ),
-                                  ),
-                                ]),
-                              ),
-                            ),
-                          ],
-                        );
-                      },
+                                ),
+                              ],
+                            );
+                          },
+                        ),
+                      ),
                     ),
-                  ),
           ),
         ],
       ),
@@ -1056,64 +1067,36 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
     );
   }
 
-  Widget _liveMapCard() {
+  // Edge-to-edge live map filling the whole body behind the bottom sheet —
+  // mirrors TrackingScreen's (Bike/Auto) reference GoogleMap exactly, rather
+  // than the small bordered "Live Movement" card this used to render, which
+  // left large empty margins once stretched to fill the full-height slot the
+  // caller actually gives it.
+  Widget _buildTrackingMap() {
     final pickupLat = double.tryParse('${_booking?['pickup_lat'] ?? ''}');
     final pickupLng = double.tryParse('${_booking?['pickup_lng'] ?? ''}');
     final dropLat = double.tryParse('${_booking?['drop_lat'] ?? ''}');
     final dropLng = double.tryParse('${_booking?['drop_lng'] ?? ''}');
     final pickup = (pickupLat != null && pickupLng != null) ? LatLng(pickupLat, pickupLng) : null;
     final drop = (dropLat != null && dropLng != null) ? LatLng(dropLat, dropLng) : null;
-    final center = _driverLatLng ?? pickup ?? drop;
-
-    if (center == null) {
-      return TrackingSectionCard(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Live Movement', style: GoogleFonts.poppins(fontSize: 15, fontWeight: FontWeight.w600, color: JT.textPrimary)),
-            const SizedBox(height: 8),
-            Text('Driver live map will appear once GPS coordinates start syncing.', style: GoogleFonts.poppins(fontSize: 12.5, color: JT.textSecondary)),
-          ],
-        ),
-      );
-    }
+    // Same Hyderabad fallback TrackingScreen seeds its camera with — pickup/
+    // drop are set at booking time so this only ever applies for the first
+    // frame or two before _booking has loaded.
+    final center = _driverLatLng ?? pickup ?? drop ?? const LatLng(17.3850, 78.4867);
 
     // Markers are built asynchronously via _updateLiveMapMarkers (called from
     // _load/socket handlers whenever booking/driver-location data changes) so
     // they show the actual matched vehicle's icon (JagoMapMarkers.vehicle),
     // not a generic colored pin.
-    final markers = _liveMapMarkers;
-
-    return TrackingSectionCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Live Movement', style: GoogleFonts.poppins(fontSize: 15, fontWeight: FontWeight.w600, color: JT.textPrimary)),
-          const SizedBox(height: 10),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(18),
-            child: SizedBox(
-              height: 190,
-              child: GoogleMap(
-                initialCameraPosition: CameraPosition(target: center, zoom: 14),
-                style: Theme.of(context).brightness == Brightness.dark ? kMapNightStyle : null,
-                markers: markers,
-                myLocationEnabled: false,
-                myLocationButtonEnabled: false,
-                zoomControlsEnabled: false,
-                compassEnabled: false,
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            _driverLatLng == null
-                ? 'Waiting for driver GPS update.'
-                : 'Driver position is syncing live for this pool ride.',
-            style: GoogleFonts.poppins(fontSize: 12.5, color: JT.textSecondary),
-          ),
-        ],
-      ),
+    return GoogleMap(
+      initialCameraPosition: CameraPosition(target: center, zoom: 14),
+      style: Theme.of(context).brightness == Brightness.dark ? kMapNightStyle : null,
+      markers: _liveMapMarkers,
+      myLocationEnabled: false,
+      myLocationButtonEnabled: false,
+      zoomControlsEnabled: false,
+      mapToolbarEnabled: false,
+      compassEnabled: false,
     );
   }
 

@@ -39,7 +39,14 @@ const MAX_DETOUR_KM = 2.5;        // max extra km to pick up a new passenger
 const MAX_MATCH_RADIUS_KM = 4;    // search for sessions within this radius
 const DIRECTION_TOLERANCE_DEG = 50; // bearing must match within ±50°
 const SEARCH_TIMEOUT_MIN = 3;     // cancel search if no driver accepted in 3 min
-const BOARDING_OTP_TTL_SECONDS = 45;
+// Was 45s — expired long before a driver could realistically reach pickup
+// (the customer UI itself quotes ~5 min ETA), so the driver's boarding OTP
+// entry failed with OTP_EXPIRED on almost every ride while the customer's
+// app kept showing the same PIN with no indication anything was wrong.
+// 30 min mirrors the regular ride's pickup-OTP window (see 40-min check in
+// verify-pickup-otp, server/routes.ts) — generous enough to survive a slow
+// approach without ever needing a live refresh.
+const BOARDING_OTP_TTL_SECONDS = 1800;
 const MATCHER_INTERVAL_MS = 20_000; // re-run matcher every 20s
 let matcherStarted = false;
 const DRIVER_ACCEPT_TIMEOUT_SEC = 45;
