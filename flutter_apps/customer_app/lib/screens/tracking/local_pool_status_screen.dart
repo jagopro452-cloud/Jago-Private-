@@ -55,12 +55,21 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
     with SingleTickerProviderStateMixin {
   final SocketService _socket = SocketService();
   Timer? _poller;
-  // Searching-screen animation, matching the Bike/Auto tracking screen's
-  // "Finding you the best ride" pulse + 3-step tracker so Car Share's first
-  // moments feel like the same product, not a different flow bolted on.
+  // Searching-screen pulse animation, matching the Bike/Auto tracking
+  // screen's "Finding you the best ride" pulse so Car Share's first moments
+  // feel like the same product, not a different flow bolted on. Purely
+  // decorative (opacity/scale loop) — it never drives what stage the
+  // 3-step tracker below shows; that comes from _searchStage, which reads
+  // real booking status only.
   late final AnimationController _pulseCtrl;
-  Timer? _searchStageTimer;
-  int _searchStage = 0; // cycles 0..2: Searching -> Verifying -> Matching
+
+  // Real state, not a timer: local pool has exactly two distinguishable
+  // pre-match phases from the backend — 'searching' (no proposal yet) and
+  // 'pending_driver_accept' (a driver has been proposed and is confirming).
+  // There's no third backend signal for a "verifying availability" phase,
+  // so that middle step is shown as passed-through once a driver is found
+  // rather than independently, fakely, activated by a clock.
+  int get _searchStage => _status == 'pending_driver_accept' ? 2 : 0;
   StreamSubscription<Map<String, dynamic>>? _poolStatusSub;
   StreamSubscription<Map<String, dynamic>>? _seatSub;
   StreamSubscription<Map<String, dynamic>>? _callIncomingSub;
@@ -199,28 +208,14 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
   void initState() {
     super.initState();
     _pulseCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400))..repeat();
-    _startSearchStageLoop();
     _wireSocket();
     _load();
     _poller = Timer.periodic(const Duration(seconds: 8), (_) => _load(silent: true));
   }
 
-  // Purely cosmetic loop that cycles the "Searching / Verifying / Matching"
-  // step indicator while a pooled driver is being found — mirrors
-  // TrackingScreen's identical loop for the normal Bike/Auto search screen.
-  void _startSearchStageLoop() {
-    _searchStageTimer?.cancel();
-    _searchStage = 0;
-    _searchStageTimer = Timer.periodic(const Duration(milliseconds: 1800), (_) {
-      if (!mounted || _status != 'searching') return;
-      setState(() => _searchStage = (_searchStage + 1) % 3);
-    });
-  }
-
   @override
   void dispose() {
     _pulseCtrl.dispose();
-    _searchStageTimer?.cancel();
     _poller?.cancel();
     _poolStatusSub?.cancel();
     _seatSub?.cancel();
@@ -606,6 +601,54 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
     );
   }
 
+  // Compact header for the pre-match 'searching' state — back button, "Car
+  // Share / Finding your ride", and a small "Shared rides · Save more"
+  // pill. The pill is purely a header indicator, per spec — there is no
+  // separate "Save more / Travel together" card anywhere on this screen.
+  Widget _buildSearchingHeader() {
+    return SafeArea(
+      bottom: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(4, 8, 16, 8),
+        child: Row(
+          children: [
+            IconButton(
+              icon: const Icon(Icons.arrow_back_ios_new_rounded, color: JT.textPrimary),
+              onPressed: () => Navigator.pop(context),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Car Share', style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w700, color: JT.textPrimary)),
+                Text('Finding your ride', style: GoogleFonts.poppins(fontSize: 12, color: JT.textSecondary)),
+              ],
+            ),
+            const Spacer(),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(color: JT.success.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(999)),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.eco_rounded, color: JT.success, size: 14),
+                  const SizedBox(width: 5),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Shared rides', style: GoogleFonts.poppins(fontSize: 9.5, fontWeight: FontWeight.w700, color: JT.success)),
+                      Text('Save more', style: GoogleFonts.poppins(fontSize: 9, color: JT.success)),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   String get _statusTitle {
     switch (_status) {
       case 'pending_driver_accept':
@@ -729,12 +772,14 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
         children: [
           _isLiveTrackingState
               ? _buildActiveHeader()
-              : TrackingHeaderBar(
-                  leading: IconButton(
-                    icon: const Icon(Icons.arrow_back_ios_new_rounded, color: JT.textPrimary),
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                ),
+              : _status == 'searching'
+                  ? _buildSearchingHeader()
+                  : TrackingHeaderBar(
+                      leading: IconButton(
+                        icon: const Icon(Icons.arrow_back_ios_new_rounded, color: JT.textPrimary),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ),
           Expanded(
             child: _loading
                 ? _buildLoadingState()
@@ -1379,9 +1424,9 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
       (Icons.task_alt_rounded, 'Matching\nyour seat'),
     ];
     return SearchingHeroCard(
-      pulseIcon: SearchPulseIcon(controller: _pulseCtrl),
-      title: 'Finding your Car Share pilot',
-      subtitle: "We're matching you with a nearby pooled driver heading your way.",
+      pulseIcon: SearchPulseIcon(controller: _pulseCtrl, size: 52, innerSize: 46, iconSize: 22),
+      title: 'Finding your Car Share',
+      subtitle: "We're looking for a nearby pooled driver.",
       livePill: SearchLivePill(
         controller: _pulseCtrl,
         nearbyLabel: '$seats ${seats == 1 ? 'seat' : 'seats'} requested',
@@ -1449,7 +1494,7 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
     return SizedBox(
       width: double.infinity,
       child: OutlinedButton.icon(
-        onPressed: _cancelling ? null : _cancelSearch,
+        onPressed: _cancelling ? null : _confirmCancelSearch,
         icon: const Icon(Icons.close_rounded, size: 15, color: Color(0xFFDC2626)),
         label: Text(
           _cancelling ? 'Cancelling...' : 'Cancel Search',
@@ -1464,12 +1509,31 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
     );
   }
 
+  Future<void> _confirmCancelSearch() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Cancel your Car Share request?'),
+        content: const Text("We'll stop looking for a pooled driver for this trip."),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep Searching')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Cancel Search'),
+          ),
+        ],
+      ),
+    );
+    if (confirm == true) _cancelSearch();
+  }
+
   Widget _buildPoolSafetyFooter() {
     return Center(
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.lock_outline_rounded, size: 11, color: Color(0xFF9CA3AF)),
+          const Icon(Icons.shield_outlined, size: 11, color: Color(0xFF9CA3AF)),
           const SizedBox(width: 5),
           Text(
             'Your safety is our priority. All rides are monitored.',
@@ -1634,6 +1698,32 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
     return (lat != null && lng != null) ? LatLng(lat, lng) : null;
   }
 
+  // Two soft rings around the pickup point, pulsing outward on the same
+  // controller the bottom sheet's search icon/live pill already use — the
+  // "no driver yet, we're searching around you" cue. Real pickup coordinate,
+  // purely decorative radius/opacity animation.
+  Set<Circle> _searchPulseCircles(LatLng pickup) {
+    final t = _pulseCtrl.value;
+    return {
+      Circle(
+        circleId: const CircleId('search_pulse_outer'),
+        center: pickup,
+        radius: 60 + t * 220,
+        fillColor: JT.primary.withValues(alpha: (1 - t) * 0.12),
+        strokeColor: JT.primary.withValues(alpha: (1 - t) * 0.25),
+        strokeWidth: 1,
+      ),
+      Circle(
+        circleId: const CircleId('search_pulse_inner'),
+        center: pickup,
+        radius: 55,
+        fillColor: JT.primary.withValues(alpha: 0.16),
+        strokeColor: JT.primary.withValues(alpha: 0.4),
+        strokeWidth: 1,
+      ),
+    };
+  }
+
   Widget _buildTrackingMap() {
     final pickup = _pickupLatLng();
     final drop = _dropLatLng();
@@ -1641,27 +1731,51 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
     // drop are set at booking time so this only ever applies for the first
     // frame or two before _booking has loaded.
     final center = _driverLatLng ?? pickup ?? drop ?? const LatLng(17.3850, 78.4867);
+    final isSearching = _status == 'searching';
 
-    // Driver-to-next-stop route: pickup while the customer hasn't boarded
-    // yet, drop once onboard — same target _liveDistanceKm tracks.
-    final headingToDrop = _status == 'picked_up';
-    final routeTarget = headingToDrop ? drop : pickup;
-    final polylines = (_driverLatLng != null && routeTarget != null)
-        ? {
-            Polyline(
-              polylineId: const PolylineId('pool_driver_route'),
-              points: [_driverLatLng!, routeTarget],
-              color: JT.primary,
-              width: 5,
-              startCap: Cap.roundCap,
-              endCap: Cap.roundCap,
-            ),
-          }
-        : <Polyline>{};
+    Set<Polyline> polylines;
+    if (isSearching) {
+      // No driver yet — show the plain pickup-to-drop route as a preview
+      // rather than nothing, same coordinates the address rows already use.
+      polylines = (pickup != null && drop != null)
+          ? {
+              Polyline(
+                polylineId: const PolylineId('pool_preview_route'),
+                points: [pickup, drop],
+                color: JT.primary,
+                width: 4,
+                patterns: [PatternItem.dash(18), PatternItem.gap(10)],
+                startCap: Cap.roundCap,
+                endCap: Cap.roundCap,
+              ),
+            }
+          : <Polyline>{};
+    } else {
+      // Driver-to-next-stop route: pickup while the customer hasn't boarded
+      // yet, drop once onboard — same target _liveDistanceKm tracks.
+      final headingToDrop = _status == 'picked_up';
+      final routeTarget = headingToDrop ? drop : pickup;
+      polylines = (_driverLatLng != null && routeTarget != null)
+          ? {
+              Polyline(
+                polylineId: const PolylineId('pool_driver_route'),
+                points: [_driverLatLng!, routeTarget],
+                color: JT.primary,
+                width: 5,
+                startCap: Cap.roundCap,
+                endCap: Cap.roundCap,
+              ),
+            }
+          : <Polyline>{};
+    }
 
     final distKm = _liveDistanceKm();
     final etaMin = _liveEtaMinutes(distKm);
-    final showInfoBubble = _isLiveTrackingState && distKm != null;
+    // Straight-line pickup-to-drop distance computed server-side at booking
+    // time (pool_ride_requests.distance_km) — real data, not a route-service
+    // call this search screen doesn't have.
+    final searchDistKm = isSearching ? double.tryParse('${_booking?['distance_km'] ?? ''}') : null;
+    final searchEtaMin = _liveEtaMinutes(searchDistKm);
 
     // Markers are built asynchronously via _updateLiveMapMarkers (called from
     // _load/socket handlers whenever booking/driver-location data changes) so
@@ -1670,20 +1784,66 @@ class _LocalPoolStatusScreenState extends State<LocalPoolStatusScreen>
     return Stack(
       children: [
         Positioned.fill(
-          child: GoogleMap(
-            initialCameraPosition: CameraPosition(target: center, zoom: 14),
-            style: Theme.of(context).brightness == Brightness.dark ? kMapNightStyle : null,
-            onMapCreated: (c) => _mapController = c,
-            markers: _liveMapMarkers,
-            polylines: polylines,
-            myLocationEnabled: false,
-            myLocationButtonEnabled: false,
-            zoomControlsEnabled: false,
-            mapToolbarEnabled: false,
-            compassEnabled: false,
-          ),
+          child: isSearching && pickup != null
+              ? AnimatedBuilder(
+                  animation: _pulseCtrl,
+                  builder: (context, _) => GoogleMap(
+                    initialCameraPosition: CameraPosition(target: center, zoom: 14),
+                    style: Theme.of(context).brightness == Brightness.dark ? kMapNightStyle : null,
+                    onMapCreated: (c) => _mapController = c,
+                    markers: _liveMapMarkers,
+                    polylines: polylines,
+                    circles: _searchPulseCircles(pickup),
+                    myLocationEnabled: false,
+                    myLocationButtonEnabled: false,
+                    zoomControlsEnabled: false,
+                    mapToolbarEnabled: false,
+                    compassEnabled: false,
+                  ),
+                )
+              : GoogleMap(
+                  initialCameraPosition: CameraPosition(target: center, zoom: 14),
+                  style: Theme.of(context).brightness == Brightness.dark ? kMapNightStyle : null,
+                  onMapCreated: (c) => _mapController = c,
+                  markers: _liveMapMarkers,
+                  polylines: polylines,
+                  myLocationEnabled: false,
+                  myLocationButtonEnabled: false,
+                  zoomControlsEnabled: false,
+                  mapToolbarEnabled: false,
+                  compassEnabled: false,
+                ),
         ),
-        if (showInfoBubble)
+        if (isSearching && searchDistKm != null)
+          Positioned(
+            top: 14,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.12), blurRadius: 12, offset: const Offset(0, 4))],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '${_formatDistanceCompact(searchDistKm)}${searchEtaMin != null ? ' • $searchEtaMin min' : ''}',
+                      style: GoogleFonts.poppins(fontSize: 12.5, fontWeight: FontWeight.w700, color: JT.textPrimary),
+                    ),
+                    Text(
+                      'Finding nearby drivers...',
+                      style: GoogleFonts.poppins(fontSize: 10.5, color: JT.textSecondary),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          )
+        else if (_isLiveTrackingState && distKm != null)
           Positioned(
             top: 14,
             left: 0,
