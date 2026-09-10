@@ -888,6 +888,38 @@ async function runMatcher(): Promise<void> {
         message: "No pool driver available nearby. Try booking a regular ride.",
       });
     }
+
+    // 4. Safety net — cancel any matched/picked_up/pending_driver_accept
+    // request whose session has already ended. The explicit /session/end
+    // route and the implicit re-start cleanup in /session/start both cancel
+    // these rows themselves, but this sweep catches any other path that ends
+    // a session (or a row whose session row was deleted/missing) so a
+    // passenger can never get stuck tripping the duplicate-booking guard
+    // with no way to self-cancel.
+    const orphanedR = await rawDb.execute(rawSql`
+      UPDATE pool_ride_requests prr
+      SET status = 'cancelled', cancelled_at = NOW(), updated_at = NOW(),
+          refund_amount = CASE WHEN prr.status = 'picked_up' THEN COALESCE(prr.total_fare, 0) ELSE 0 END,
+          cancel_reason = 'Driver session ended unexpectedly'
+      FROM (SELECT id, session_id, proposed_session_id, status AS req_status FROM pool_ride_requests) src
+      WHERE prr.id = src.id
+        AND src.req_status IN ('matched', 'picked_up', 'pending_driver_accept')
+        AND NOT EXISTS (
+          SELECT 1 FROM driver_pool_sessions dps
+          WHERE dps.id = COALESCE(src.session_id, src.proposed_session_id)
+            AND dps.status = 'active'
+        )
+      RETURNING prr.id, prr.customer_id, src.req_status, prr.refund_amount
+    `).catch(() => ({ rows: [] as any[] }));
+
+    for (const row of orphanedR.rows as any[]) {
+      const wasPickedUp = (row as any).req_status === 'picked_up';
+      io.to(`user:${(row as any).customer_id}`).emit("pool:cancelled", {
+        requestId: (row as any).id,
+        reason: "Your pool driver's session ended unexpectedly. A refund has been initiated." + (wasPickedUp ? "" : " Please rebook."),
+        refundAmount: wasPickedUp ? parseFloat((row as any).refund_amount || 0) : 0,
+      });
+    }
   } catch (e: any) {
     console.error("[ROLLING-POOL] matcher error", e?.message);
   }
@@ -972,7 +1004,46 @@ export function registerRollingPoolRoutes(app: Express, authApp: any, requireAdm
         ));
       }
 
-      // End any existing active session first
+      // End any existing active session first. Mirrors the explicit
+      // POST /session/end cleanup below — without this, a passenger row left
+      // 'matched'/'picked_up'/'pending_driver_accept' under a session the
+      // driver abandoned (app crash, force-close mid-ride) would never clear,
+      // permanently tripping the customer's duplicate-booking guard with no
+      // way for them to self-cancel (picked_up blocks customer self-cancel).
+      const staleSessionR = await rawDb.execute(rawSql`
+        SELECT id FROM driver_pool_sessions WHERE driver_id = ${driver.id}::uuid AND status = 'active'
+      `);
+      for (const s of staleSessionR.rows as any[]) {
+        const staleSessionId = String(s.id);
+        const orphanedR = await rawDb.execute(rawSql`
+          UPDATE pool_ride_requests prr
+          SET status = 'cancelled', cancelled_at = NOW(), updated_at = NOW(),
+              refund_amount = CASE WHEN prr.status = 'picked_up' THEN COALESCE(prr.total_fare, 0) ELSE 0 END,
+              cancel_reason = CASE
+                WHEN prr.status = 'picked_up' THEN 'Driver ended session mid-ride'
+                WHEN prr.status = 'pending_driver_accept' THEN 'Driver ended session before confirming seat'
+                ELSE 'Driver ended pool session'
+              END
+          FROM (SELECT id, status AS req_status FROM pool_ride_requests) src
+          WHERE prr.id = src.id
+            AND COALESCE(prr.session_id, prr.proposed_session_id) = ${staleSessionId}::uuid
+            AND src.req_status IN ('matched', 'picked_up', 'pending_driver_accept')
+          RETURNING prr.customer_id, src.req_status, prr.refund_amount
+        `);
+        for (const p of orphanedR.rows as any[]) {
+          const wasPickedUp = p.req_status === 'picked_up';
+          const wasPending = p.req_status === 'pending_driver_accept';
+          const refundAmt = parseFloat(p.refund_amount || 0);
+          io.to(`user:${p.customer_id}`).emit("pool:cancelled", {
+            reason: wasPickedUp
+              ? "Driver ended session during your ride. A refund has been initiated."
+              : wasPending
+              ? "The driver ended their session before confirming your seat. Please rebook."
+              : "Driver ended pool session. Please rebook.",
+            refundAmount: wasPickedUp ? refundAmt : 0,
+          });
+        }
+      }
       await rawDb.execute(rawSql`
         UPDATE driver_pool_sessions
         SET status = 'ended', ended_at = NOW(), updated_at = NOW()
@@ -1558,21 +1629,23 @@ export function registerRollingPoolRoutes(app: Express, authApp: any, requireAdm
       // picked_up passengers who didn't complete their drop get a full refund
       // pending_driver_accept passengers get seats released before session row is closed
       const pendingR = await rawDb.execute(rawSql`
-        UPDATE pool_ride_requests
+        UPDATE pool_ride_requests prr
         SET status = 'cancelled', cancelled_at = NOW(), updated_at = NOW(),
-            refund_amount = CASE WHEN status = 'picked_up' THEN COALESCE(total_fare, 0) ELSE 0 END,
+            refund_amount = CASE WHEN prr.status = 'picked_up' THEN COALESCE(prr.total_fare, 0) ELSE 0 END,
             cancel_reason = CASE
-              WHEN status = 'picked_up' THEN 'Driver ended session mid-ride'
-              WHEN status = 'pending_driver_accept' THEN 'Driver ended session before confirming seat'
+              WHEN prr.status = 'picked_up' THEN 'Driver ended session mid-ride'
+              WHEN prr.status = 'pending_driver_accept' THEN 'Driver ended session before confirming seat'
               ELSE 'Driver ended pool session'
             END
-        WHERE COALESCE(session_id, proposed_session_id) = ${sessionId}::uuid
-          AND status IN ('matched', 'picked_up', 'pending_driver_accept')
-        RETURNING customer_id, status, refund_amount
+        FROM (SELECT id, status AS req_status FROM pool_ride_requests) src
+        WHERE prr.id = src.id
+          AND COALESCE(prr.session_id, prr.proposed_session_id) = ${sessionId}::uuid
+          AND src.req_status IN ('matched', 'picked_up', 'pending_driver_accept')
+        RETURNING prr.customer_id, src.req_status, prr.refund_amount
       `);
       for (const p of pendingR.rows as any[]) {
-        const wasPickedUp = p.status === 'picked_up';
-        const wasPending = p.status === 'pending_driver_accept';
+        const wasPickedUp = p.req_status === 'picked_up';
+        const wasPending = p.req_status === 'pending_driver_accept';
         const refundAmt = parseFloat(p.refund_amount || 0);
         io.to(`user:${p.customer_id}`).emit("pool:cancelled", {
           reason: wasPickedUp
