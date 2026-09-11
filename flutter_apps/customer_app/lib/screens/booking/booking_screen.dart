@@ -2246,9 +2246,9 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
         child: Shimmer.fromColors(
           baseColor: const Color(0xFFE5E7EB),
           highlightColor: const Color(0xFFF3F4F6),
-          child: Column(children: List.generate(4, (_) => Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: Container(height: 92, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16))),
+          child: Column(children: List.generate(5, (_) => Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Container(height: 76, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14))),
           ))),
         ),
       );
@@ -2306,9 +2306,10 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
         final Color selColor = const Color(0xFF7C3AED); // matches the active bottom-nav accent
 
         // One compact row per vehicle: image, name, price, selection circle.
-        // No ETA/drop-time/FASTEST badge — those pushed the card past the
-        // target 85-105px height without adding anything the user needs to
-        // pick a vehicle from this list.
+        // No ETA/drop-time/FASTEST badge. Card height is image-driven
+        // (56px artwork + 20px vertical padding = ~76px), landing in the
+        // 75-95px target regardless of how long the vehicle name is, since
+        // the name is capped to one line.
         return GestureDetector(
           key: ValueKey(i),
           onTap: () {
@@ -2321,19 +2322,19 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
           },
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 300),
-            margin: const EdgeInsets.only(bottom: 10),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(
               color: isSelected ? selColor.withValues(alpha: 0.06) : Colors.white,
-              borderRadius: BorderRadius.circular(16),
+              borderRadius: BorderRadius.circular(14),
               border: Border.all(
                 color: isSelected ? selColor.withValues(alpha: 0.35) : JT.border,
                 width: isSelected ? 1.5 : 1,
               ),
               boxShadow: isSelected ? [
-                BoxShadow(color: selColor.withValues(alpha: 0.08), blurRadius: 8, offset: const Offset(0, 2))
+                BoxShadow(color: selColor.withValues(alpha: 0.08), blurRadius: 6, offset: const Offset(0, 2))
               ] : [
-                BoxShadow(color: Colors.black.withValues(alpha: 0.02), blurRadius: 4, offset: const Offset(0, 2))
+                BoxShadow(color: Colors.black.withValues(alpha: 0.02), blurRadius: 3, offset: const Offset(0, 1))
               ],
             ),
             child: Opacity(
@@ -2342,15 +2343,15 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
                 children: [
                   // Vehicle Illustration
                   Container(
-                    width: 60, height: 60,
-                    padding: const EdgeInsets.all(6),
+                    width: 56, height: 56,
+                    padding: const EdgeInsets.all(5),
                     decoration: BoxDecoration(
                       color: isSelected ? selColor.withValues(alpha: 0.1) : const Color(0xFFF9FAFB),
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(11),
                     ),
                     child: VehicleArtwork(vehicleKey: name, fit: BoxFit.contain),
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 10),
 
                   // Name
                   Expanded(
@@ -2359,8 +2360,8 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: GoogleFonts.poppins(
-                        fontSize: 21,
-                        fontWeight: FontWeight.w700,
+                        fontSize: 19,
+                        fontWeight: FontWeight.w600,
                         color: const Color(0xFF1E293B)
                       ),
                     ),
@@ -2372,12 +2373,12 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
                     '₹${displayFare.toStringAsFixed(0)}',
                     maxLines: 1,
                     style: GoogleFonts.poppins(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w800,
+                      fontSize: 19,
+                      fontWeight: FontWeight.w700,
                       color: const Color(0xFF1E293B)
                     ),
                   ),
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 8),
 
                   // Selection circle — filled + check when selected, hollow
                   // outline when not.
