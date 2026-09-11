@@ -390,22 +390,6 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
     );
   }
 
-  /// Parse "~5 min" / "5 min" / "5-8 min" → arrival minutes number
-  static int _etaMins(String timeStr) {
-    final match = RegExp(r'(\d+)').firstMatch(timeStr);
-    return match != null ? int.tryParse(match.group(1) ?? '5') ?? 5 : 5;
-  }
-
-  /// "Drop 6:14 pm" style string from eta
-  static String _dropTimeStr(String timeStr) {
-    final mins = _etaMins(timeStr);
-    final dropTime = DateTime.now().add(Duration(minutes: mins + 10));
-    final h = dropTime.hour > 12 ? dropTime.hour - 12 : (dropTime.hour == 0 ? 12 : dropTime.hour);
-    final m = dropTime.minute.toString().padLeft(2, '0');
-    final ampm = dropTime.hour >= 12 ? 'pm' : 'am';
-    return '$h:$m $ampm';
-  }
-
   // ignore: unused_element
   static String _capacityForVehicle(String name) {
     final n = name.toLowerCase();
@@ -2069,28 +2053,6 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
     );
   }
 
-  String? _getVehicleTag(int index) {
-    if (_allFares.length < 2) return null;
-    int fastestIdx = 0, saverIdx = 0, premiumIdx = 0;
-    for (int j = 0; j < _allFares.length; j++) {
-      final f = _allFares[j];
-      final fare = (f['estimatedFare'] ?? 0).toDouble();
-      final bestFare = (_allFares[saverIdx]['estimatedFare'] ?? 0).toDouble();
-      final highFare = (_allFares[premiumIdx]['estimatedFare'] ?? 0).toDouble();
-      if (fare < bestFare) saverIdx = j;
-      if (fare > highFare) premiumIdx = j;
-      final timeStr = f['estimatedTime']?.toString() ?? '99 min';
-      final timeNum = int.tryParse(timeStr.replaceAll(RegExp(r'[^0-9]'), '')) ?? 99;
-      final bestTimeStr = _allFares[fastestIdx]['estimatedTime']?.toString() ?? '99 min';
-      final bestTimeNum = int.tryParse(bestTimeStr.replaceAll(RegExp(r'[^0-9]'), '')) ?? 99;
-      if (timeNum < bestTimeNum) fastestIdx = j;
-    }
-    if (index == fastestIdx) return 'FASTEST';
-    if (index == saverIdx && index != fastestIdx) return 'SAVER';
-    if (index == premiumIdx && index != fastestIdx && _allFares.length >= 3) return 'PREMIUM';
-    return null;
-  }
-
   // ignore: unused_element
   Widget _vehicleTagBadge(String tag) {
     Color color;
@@ -2284,9 +2246,9 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
         child: Shimmer.fromColors(
           baseColor: const Color(0xFFE5E7EB),
           highlightColor: const Color(0xFFF3F4F6),
-          child: Column(children: List.generate(3, (_) => Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: Container(height: 128, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(18))),
+          child: Column(children: List.generate(4, (_) => Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Container(height: 92, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16))),
           ))),
         ),
       );
@@ -2332,7 +2294,6 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
         final isSelected = i == _selectedFareIndex && isActive;
         final name = f['vehicleCategoryName']?.toString() ?? f['vehicleName']?.toString() ?? f['name']?.toString() ?? 'Bike';
         final fareVal = (f['estimatedFare'] ?? 0).toDouble();
-        final time = f['estimatedTime']?.toString() ?? '~5 min';
         final autoDiscount =
             double.tryParse(f['autoDiscountAmount']?.toString() ?? '0') ?? 0;
         final selectedCouponDiscount = isSelected ? _promoDiscount : 0.0;
@@ -2341,16 +2302,13 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
         final displayFare =
             (fareVal - selectedCouponDiscount - selectedAutoDiscount)
                 .clamp(0.0, double.infinity);
-        
-        final etaMins = _etaMins(time);
-        final dropTime = _dropTimeStr(time);
-        final tag = _getVehicleTag(i);
-        final isFastest = tag == 'FASTEST';
-        
-        final subtitle = isActive ? '$etaMins min • Drop $dropTime' : 'Currently Unavailable';
 
         final Color selColor = const Color(0xFF7C3AED); // matches the active bottom-nav accent
 
+        // One compact row per vehicle: image, name, price, selection circle.
+        // No ETA/drop-time/FASTEST badge — those pushed the card past the
+        // target 85-105px height without adding anything the user needs to
+        // pick a vehicle from this list.
         return GestureDetector(
           key: ValueKey(i),
           onTap: () {
@@ -2363,17 +2321,17 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
           },
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 300),
-            margin: const EdgeInsets.only(bottom: 12),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+            margin: const EdgeInsets.only(bottom: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             decoration: BoxDecoration(
               color: isSelected ? selColor.withValues(alpha: 0.06) : Colors.white,
-              borderRadius: BorderRadius.circular(18),
+              borderRadius: BorderRadius.circular(16),
               border: Border.all(
                 color: isSelected ? selColor.withValues(alpha: 0.35) : JT.border,
                 width: isSelected ? 1.5 : 1,
               ),
               boxShadow: isSelected ? [
-                BoxShadow(color: selColor.withValues(alpha: 0.08), blurRadius: 10, offset: const Offset(0, 3))
+                BoxShadow(color: selColor.withValues(alpha: 0.08), blurRadius: 8, offset: const Offset(0, 2))
               ] : [
                 BoxShadow(color: Colors.black.withValues(alpha: 0.02), blurRadius: 4, offset: const Offset(0, 2))
               ],
@@ -2384,103 +2342,57 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
                 children: [
                   // Vehicle Illustration
                   Container(
-                    width: 72, height: 72,
+                    width: 60, height: 60,
                     padding: const EdgeInsets.all(6),
                     decoration: BoxDecoration(
                       color: isSelected ? selColor.withValues(alpha: 0.1) : const Color(0xFFF9FAFB),
-                      borderRadius: BorderRadius.circular(14),
+                      borderRadius: BorderRadius.circular(12),
                     ),
                     child: VehicleArtwork(vehicleKey: name, fit: BoxFit.contain),
                   ),
-                  const SizedBox(width: 14),
+                  const SizedBox(width: 12),
 
-                  // Details
+                  // Name
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Row(
-                          children: [
-                            Flexible(
-                              child: Text(
-                                name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: GoogleFonts.poppins(
-                                  fontSize: 22,
-                                  fontWeight: FontWeight.w700,
-                                  color: const Color(0xFF1E293B)
-                                ),
-                              ),
-                            ),
-                            if (isFastest && isActive) ...[
-                              const SizedBox(width: 6),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFE8F2FF),
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                child: Text('FASTEST',
-                                  style: GoogleFonts.poppins(color: JT.primary, fontSize: 9, fontWeight: FontWeight.w800)),
-                              ),
-                            ],
-                          ],
-                        ),
-                        const SizedBox(height: 5),
-                        Text(
-                          subtitle,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: GoogleFonts.poppins(
-                            color: isSelected ? selColor : const Color(0xFF64748B),
-                            fontSize: 16,
-                            fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400
-                          ),
-                        ),
-                      ],
+                    child: Text(
+                      isActive ? name : '$name • Unavailable',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.poppins(
+                        fontSize: 21,
+                        fontWeight: FontWeight.w700,
+                        color: const Color(0xFF1E293B)
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+
+                  // Price
+                  Text(
+                    '₹${displayFare.toStringAsFixed(0)}',
+                    maxLines: 1,
+                    style: GoogleFonts.poppins(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                      color: const Color(0xFF1E293B)
                     ),
                   ),
                   const SizedBox(width: 10),
 
-                  // Pricing
-                  Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(
-                        '₹${displayFare.toStringAsFixed(0)}',
-                        maxLines: 1,
-                        style: GoogleFonts.poppins(
-                          fontSize: 26,
-                          fontWeight: FontWeight.w800,
-                          color: const Color(0xFF1E293B)
-                        ),
-                      ),
-                      if (isSelected && _promoDiscount > 0)
-                        Text(
-                          '₹${fareVal.toInt()}',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey,
-                            decoration: TextDecoration.lineThrough
-                          ),
-                        ),
-                    ],
-                  ),
-                  if (isSelected) ...[
-                    const SizedBox(width: 10),
-                    Container(
-                      width: 24,
-                      height: 24,
-                      decoration: const BoxDecoration(
-                        color: Color(0xFF7C3AED),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(Icons.check_rounded, color: Colors.white, size: 15),
+                  // Selection circle — filled + check when selected, hollow
+                  // outline when not.
+                  Container(
+                    width: 22,
+                    height: 22,
+                    decoration: BoxDecoration(
+                      color: isSelected ? selColor : Colors.transparent,
+                      shape: BoxShape.circle,
+                      border: isSelected ? null : Border.all(color: JT.border, width: 1.5),
                     ),
-                  ],
+                    child: isSelected
+                        ? const Icon(Icons.check_rounded, color: Colors.white, size: 14)
+                        : null,
+                  ),
                 ],
               ),
             ),
