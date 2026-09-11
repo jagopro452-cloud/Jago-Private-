@@ -7,9 +7,8 @@ import '../../core/map_night_style.dart';
 /// The map + bottom-sheet shell shared by every step-based booking flow —
 /// extracted verbatim from [BookingScreen]'s `build()` method (Bike/Auto/Cab/
 /// Premium's reference booking screen): a full-screen [GoogleMap] behind a
-/// recenter FAB, a floating back-button/title card, a step-progress row, and
-/// a draggable-height bottom sheet holding a scrollable step body and a
-/// bottom CTA button.
+/// recenter FAB, a floating back-button/title card, and a draggable-height
+/// bottom sheet holding a scrollable step body and a bottom CTA button.
 ///
 /// This widget is purely presentational — it owns no booking state or
 /// business logic. Callers (e.g. [BookingScreen], `CarShareOptionsScreen`)
@@ -26,8 +25,6 @@ class BookingMapShell extends StatelessWidget {
     required this.title,
     this.subtitle = '',
     this.headerExtra,
-    required this.totalSteps,
-    required this.currentStep,
     required this.sheetMaxHeight,
     required this.stepBody,
     required this.stepBodyKey,
@@ -64,12 +61,6 @@ class BookingMapShell extends StatelessWidget {
   /// Optional extra content rendered below the title/subtitle inside the
   /// header card (e.g. BookingScreen's "For me / For else" toggle).
   final Widget? headerExtra;
-
-  /// Number of segments drawn in the step-progress bar.
-  final int totalSteps;
-
-  /// Zero-based index of the currently active step.
-  final int currentStep;
 
   /// Max height of the bottom sheet — callers vary this per-step exactly as
   /// BookingScreen's build() does (`_bookingStep == farePayment ? h*0.5 : 360`).
@@ -152,66 +143,59 @@ class BookingMapShell extends StatelessWidget {
             bottom: false,
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              child: Row(
                 children: [
-                  Row(
-                    children: [
-                      GestureDetector(
-                        onTap: onBack ?? () => Navigator.pop(context),
-                        child: Container(
-                          width: 48,
-                          height: 48,
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(16),
-                            boxShadow: JT.cardShadow,
-                          ),
-                          child: const Icon(Icons.arrow_back_rounded, color: JT.textPrimary),
-                        ),
+                  GestureDetector(
+                    onTap: onBack ?? () => Navigator.pop(context),
+                    child: Container(
+                      width: 48,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: JT.cardShadow,
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(18),
-                            boxShadow: JT.cardShadow,
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                title,
-                                style: GoogleFonts.poppins(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600,
-                                  color: JT.textPrimary,
-                                ),
-                              ),
-                              if (subtitle.isNotEmpty) ...[
-                                const SizedBox(height: 3),
-                                Text(
-                                  subtitle,
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 11,
-                                    color: JT.textSecondary,
-                                  ),
-                                ),
-                              ],
-                              if (headerExtra != null) ...[
-                                const SizedBox(height: 8),
-                                headerExtra!,
-                              ],
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
+                      child: const Icon(Icons.arrow_back_rounded, color: JT.textPrimary),
+                    ),
                   ),
-                  const SizedBox(height: 12),
-                  _StepProgressBar(totalSteps: totalSteps, currentStep: currentStep),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(18),
+                        boxShadow: JT.cardShadow,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title,
+                            style: GoogleFonts.poppins(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color: JT.textPrimary,
+                            ),
+                          ),
+                          if (subtitle.isNotEmpty) ...[
+                            const SizedBox(height: 3),
+                            Text(
+                              subtitle,
+                              style: GoogleFonts.poppins(
+                                fontSize: 11,
+                                color: JT.textSecondary,
+                              ),
+                            ),
+                          ],
+                          if (headerExtra != null) ...[
+                            const SizedBox(height: 8),
+                            headerExtra!,
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -305,48 +289,6 @@ class BookingMapShell extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-class _StepProgressBar extends StatelessWidget {
-  const _StepProgressBar({required this.totalSteps, required this.currentStep});
-
-  final int totalSteps;
-  final int currentStep;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: JT.cardShadow,
-      ),
-      child: Row(
-        children: List.generate(totalSteps, (index) {
-          final isDone = index < currentStep;
-          final isActive = index == currentStep;
-          return Expanded(
-            child: Row(
-              children: [
-                Expanded(
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 220),
-                    height: 6,
-                    decoration: BoxDecoration(
-                      color: isDone || isActive ? JT.primary : JT.border,
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                  ),
-                ),
-                if (index < totalSteps - 1) const SizedBox(width: 6),
-              ],
-            ),
-          );
-        }),
-      ),
     );
   }
 }

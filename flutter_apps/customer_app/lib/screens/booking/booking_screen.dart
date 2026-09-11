@@ -1381,9 +1381,16 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
               !_estimating && visibleFares.isNotEmpty && _selectedFareIndex < _allFares.length;
           final canContinueFromFare = !_loading && !_estimating;
           final screenHeight = MediaQuery.of(context).size.height;
+          // Vehicle step gets a taller sheet than the other steps: it's the
+          // one screen where the scrollable content is a list of ride cards
+          // rather than a couple of summary rows, so it needs real room to
+          // show several compact cards at once instead of ~1 card peeking
+          // above the fold.
           final sheetMaxHeight = _bookingStep == _BookingStep.farePayment
               ? screenHeight * 0.5
-              : 360.0;
+              : _bookingStep == _BookingStep.vehicle
+                  ? screenHeight * 0.64
+                  : 360.0;
 
           // Mirrors the try/catch that used to wrap the inline Builder around
           // _buildStepBody(...) directly in the Stack — kept here (evaluated
@@ -1439,8 +1446,6 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
             title: _bookingStepTitle,
             subtitle: _bookingStepSubtitle,
             headerExtra: _bookingStep == _BookingStep.farePayment ? _buildForWhomToggle() : null,
-            totalSteps: _BookingStep.values.length,
-            currentStep: _BookingStep.values.indexOf(_bookingStep),
             sheetMaxHeight: sheetMaxHeight,
             stepBody: stepBodyContent,
             stepBodyKey: _bookingStep.name,
@@ -2279,9 +2284,9 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
         child: Shimmer.fromColors(
           baseColor: const Color(0xFFE5E7EB),
           highlightColor: const Color(0xFFF3F4F6),
-          child: Column(children: List.generate(2, (_) => Padding(
+          child: Column(children: List.generate(3, (_) => Padding(
             padding: const EdgeInsets.only(bottom: 12),
-            child: Container(height: 96, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20))),
+            child: Container(height: 128, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(18))),
           ))),
         ),
       );
@@ -2358,19 +2363,19 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
           },
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 300),
-            margin: const EdgeInsets.only(bottom: 14),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
             decoration: BoxDecoration(
               color: isSelected ? selColor.withValues(alpha: 0.06) : Colors.white,
-              borderRadius: BorderRadius.circular(20),
+              borderRadius: BorderRadius.circular(18),
               border: Border.all(
-                color: isSelected ? selColor.withValues(alpha: 0.3) : JT.border,
-                width: isSelected ? 2 : 1,
+                color: isSelected ? selColor.withValues(alpha: 0.35) : JT.border,
+                width: isSelected ? 1.5 : 1,
               ),
               boxShadow: isSelected ? [
-                BoxShadow(color: selColor.withValues(alpha: 0.08), blurRadius: 12, offset: const Offset(0, 4))
+                BoxShadow(color: selColor.withValues(alpha: 0.08), blurRadius: 10, offset: const Offset(0, 3))
               ] : [
-                BoxShadow(color: Colors.black.withValues(alpha: 0.02), blurRadius: 5, offset: const Offset(0, 2))
+                BoxShadow(color: Colors.black.withValues(alpha: 0.02), blurRadius: 4, offset: const Offset(0, 2))
               ],
             ),
             child: Opacity(
@@ -2379,66 +2384,76 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
                 children: [
                   // Vehicle Illustration
                   Container(
-                    width: 84, height: 84,
+                    width: 72, height: 72,
                     padding: const EdgeInsets.all(6),
                     decoration: BoxDecoration(
                       color: isSelected ? selColor.withValues(alpha: 0.1) : const Color(0xFFF9FAFB),
-                      borderRadius: BorderRadius.circular(16),
+                      borderRadius: BorderRadius.circular(14),
                     ),
                     child: VehicleArtwork(vehicleKey: name, fit: BoxFit.contain),
                   ),
-                  const SizedBox(width: 18),
-                  
+                  const SizedBox(width: 14),
+
                   // Details
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
                       children: [
                         Row(
                           children: [
-                            Text(
-                              name,
-                              style: GoogleFonts.poppins(
-                                fontSize: 20,
-                                fontWeight: FontWeight.w700,
-                                color: const Color(0xFF1E293B)
+                            Flexible(
+                              child: Text(
+                                name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: GoogleFonts.poppins(
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.w700,
+                                  color: const Color(0xFF1E293B)
+                                ),
                               ),
                             ),
                             if (isFastest && isActive) ...[
-                              const SizedBox(width: 8),
+                              const SizedBox(width: 6),
                               Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                                 decoration: BoxDecoration(
                                   color: const Color(0xFFE8F2FF),
                                   borderRadius: BorderRadius.circular(6),
                                 ),
                                 child: Text('FASTEST',
-                                  style: GoogleFonts.poppins(color: JT.primary, fontSize: 10, fontWeight: FontWeight.w800)),
+                                  style: GoogleFonts.poppins(color: JT.primary, fontSize: 9, fontWeight: FontWeight.w800)),
                               ),
                             ],
                           ],
                         ),
-                        const SizedBox(height: 6),
+                        const SizedBox(height: 5),
                         Text(
                           subtitle,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                           style: GoogleFonts.poppins(
                             color: isSelected ? selColor : const Color(0xFF64748B),
-                            fontSize: 15,
+                            fontSize: 16,
                             fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400
                           ),
                         ),
                       ],
                     ),
                   ),
-                  
+                  const SizedBox(width: 10),
+
                   // Pricing
                   Column(
+                    mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       Text(
                         '₹${displayFare.toStringAsFixed(0)}',
+                        maxLines: 1,
                         style: GoogleFonts.poppins(
-                          fontSize: 25,
+                          fontSize: 26,
                           fontWeight: FontWeight.w800,
                           color: const Color(0xFF1E293B)
                         ),
@@ -2447,7 +2462,7 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
                         Text(
                           '₹${fareVal.toInt()}',
                           style: const TextStyle(
-                            fontSize: 13,
+                            fontSize: 12,
                             color: Colors.grey,
                             decoration: TextDecoration.lineThrough
                           ),
@@ -2455,15 +2470,15 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
                     ],
                   ),
                   if (isSelected) ...[
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 10),
                     Container(
-                      width: 28,
-                      height: 28,
+                      width: 24,
+                      height: 24,
                       decoration: const BoxDecoration(
                         color: Color(0xFF7C3AED),
                         shape: BoxShape.circle,
                       ),
-                      child: const Icon(Icons.check_rounded, color: Colors.white, size: 18),
+                      child: const Icon(Icons.check_rounded, color: Colors.white, size: 15),
                     ),
                   ],
                 ],
