@@ -2281,7 +2281,7 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
           highlightColor: const Color(0xFFF3F4F6),
           child: Column(children: List.generate(2, (_) => Padding(
             padding: const EdgeInsets.only(bottom: 12),
-            child: Container(height: 80, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20))),
+            child: Container(height: 96, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20))),
           ))),
         ),
       );
@@ -2358,8 +2358,8 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
           },
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 300),
-            margin: const EdgeInsets.only(bottom: 12),
-            padding: const EdgeInsets.all(12),
+            margin: const EdgeInsets.only(bottom: 14),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             decoration: BoxDecoration(
               color: isSelected ? selColor.withValues(alpha: 0.06) : Colors.white,
               borderRadius: BorderRadius.circular(20),
@@ -2379,15 +2379,15 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
                 children: [
                   // Vehicle Illustration
                   Container(
-                    width: 70, height: 70,
-                    padding: const EdgeInsets.all(4),
+                    width: 84, height: 84,
+                    padding: const EdgeInsets.all(6),
                     decoration: BoxDecoration(
                       color: isSelected ? selColor.withValues(alpha: 0.1) : const Color(0xFFF9FAFB),
                       borderRadius: BorderRadius.circular(16),
                     ),
                     child: VehicleArtwork(vehicleKey: name, fit: BoxFit.contain),
                   ),
-                  const SizedBox(width: 16),
+                  const SizedBox(width: 18),
                   
                   // Details
                   Expanded(
@@ -2399,8 +2399,8 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
                             Text(
                               name,
                               style: GoogleFonts.poppins(
-                                fontSize: 18, 
-                                fontWeight: FontWeight.w700, 
+                                fontSize: 20,
+                                fontWeight: FontWeight.w700,
                                 color: const Color(0xFF1E293B)
                               ),
                             ),
@@ -2413,17 +2413,17 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
                                   borderRadius: BorderRadius.circular(6),
                                 ),
                                 child: Text('FASTEST',
-                                  style: GoogleFonts.poppins(color: JT.primary, fontSize: 9, fontWeight: FontWeight.w800)),
+                                  style: GoogleFonts.poppins(color: JT.primary, fontSize: 10, fontWeight: FontWeight.w800)),
                               ),
                             ],
                           ],
                         ),
-                        const SizedBox(height: 4),
+                        const SizedBox(height: 6),
                         Text(
                           subtitle,
                           style: GoogleFonts.poppins(
-                            color: isSelected ? selColor : const Color(0xFF64748B), 
-                            fontSize: 13, 
+                            color: isSelected ? selColor : const Color(0xFF64748B),
+                            fontSize: 15,
                             fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400
                           ),
                         ),
@@ -2438,8 +2438,8 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
                       Text(
                         '₹${displayFare.toStringAsFixed(0)}',
                         style: GoogleFonts.poppins(
-                          fontSize: 22, 
-                          fontWeight: FontWeight.w800, 
+                          fontSize: 25,
+                          fontWeight: FontWeight.w800,
                           color: const Color(0xFF1E293B)
                         ),
                       ),
@@ -2447,7 +2447,7 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
                         Text(
                           '₹${fareVal.toInt()}',
                           style: const TextStyle(
-                            fontSize: 12,
+                            fontSize: 13,
                             color: Colors.grey,
                             decoration: TextDecoration.lineThrough
                           ),
@@ -2455,15 +2455,15 @@ class _BookingScreenState extends State<BookingScreen> with TickerProviderStateM
                     ],
                   ),
                   if (isSelected) ...[
-                    const SizedBox(width: 10),
+                    const SizedBox(width: 12),
                     Container(
-                      width: 26,
-                      height: 26,
+                      width: 28,
+                      height: 28,
                       decoration: const BoxDecoration(
                         color: Color(0xFF7C3AED),
                         shape: BoxShape.circle,
                       ),
-                      child: const Icon(Icons.check_rounded, color: Colors.white, size: 16),
+                      child: const Icon(Icons.check_rounded, color: Colors.white, size: 18),
                     ),
                   ],
                 ],

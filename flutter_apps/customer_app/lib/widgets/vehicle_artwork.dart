@@ -26,13 +26,21 @@ class VehicleArtwork extends StatelessWidget {
     this.tint,
   });
 
-  /// PRIORITY 0: Exact vehicle photos supplied by the business for Auto,
-  /// Sedan, Cab, SUV/XL and Mini. These always win over admin icons and
-  /// local 3D art for these categories — single source of truth shared by
-  /// the Home Screen and the ride vehicle-selection screen.
+  /// PRIORITY 0: Exact vehicle photos supplied by the business for Bike,
+  /// Auto, Sedan, Cab, SUV/XL and Mini. These always win over admin icons
+  /// and local 3D art for these categories — single source of truth shared
+  /// by the Home Screen and the ride vehicle-selection screen.
   /// 'premium' is aliased to the same SUV/XL photo since that category was
   /// visually rebranded from "Premium" to "SUV / XL".
+  ///
+  /// 'bike' lives here (not in [localPng3D]) because `assets/vehicles_3d/`
+  /// isn't declared in pubspec.yaml and doesn't exist on disk — every
+  /// localPng3D/_assets lookup silently fails and falls through to a bare
+  /// icon. This reuses the same network photo the Home Screen's Bike tile
+  /// already renders successfully, so Bike now resolves the same way as
+  /// every other category instead of hitting that dead asset path.
   static const Map<String, String> providedPhotos = {
+    'bike': 'https://res.cloudinary.com/kits/image/upload/e_make_transparent:15/q_auto/f_png/v1775123974/bike_logo_g7idrq.png',
     'auto': 'https://res.cloudinary.com/umg8p3bl/image/upload/f_auto,q_auto/ChatGPT_Image_Sep_10_2026_11_29_29_AM',
     'sedan': 'https://res.cloudinary.com/umg8p3bl/image/upload/f_auto,q_auto/ChatGPT_Image_Sep_10_2026_11_34_17_AM',
     'cab': 'https://res.cloudinary.com/umg8p3bl/image/upload/f_auto,q_auto/ChatGPT_Image_Sep_10_2026_11_35_14_AM',

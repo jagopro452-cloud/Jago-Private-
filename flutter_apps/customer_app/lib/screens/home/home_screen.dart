@@ -1555,33 +1555,41 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
 
 
+  // Card content uses a plain Row (no Stack/Positioned) so the artwork is
+  // bounded by normal box constraints and can never bleed past the card's
+  // rounded corners. The artwork box is sized from the actual available
+  // card height (via LayoutBuilder), not a fixed constant, so it always
+  // fits cleanly even on narrow phones where the GridView above gives this
+  // card a shorter height — capped at maxArtworkSize so it doesn't grow
+  // oversized on wide/tall cards.
   Widget _homeServiceTile({
     required String label,
     required String vehicleKey,
     String? imageUrl,
     required VoidCallback onTap,
     double labelFontSize = 14,
-    double artworkWidth = 76,
-    double artworkRight = -6,
+    double maxArtworkSize = 44,
   }) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
           color: JT.surface,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(color: JT.border, width: 1),
           boxShadow: JT.cardShadow,
         ),
-        child: Stack(
-          clipBehavior: Clip.none,
+        child: LayoutBuilder(builder: (context, constraints) {
+          final artworkSize = constraints.maxHeight.isFinite
+              ? constraints.maxHeight.clamp(0.0, maxArtworkSize)
+              : maxArtworkSize;
+          return Row(
           children: [
-            Positioned(
-              left: 14,
-              top: 0,
-              bottom: 0,
+            Expanded(
               child: FittedBox(
                 fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
                 child: Text(
                   label,
                   style: GoogleFonts.poppins(
@@ -1592,22 +1600,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ),
               ),
             ),
-            Positioned(
-              right: artworkRight,
-              top: -6,
-              bottom: -6,
+            const SizedBox(width: 6),
+            SizedBox(
+              width: artworkSize,
+              height: artworkSize,
               child: imageUrl != null
                   ? CachedNetworkImage(
                       imageUrl: imageUrl,
-                      width: artworkWidth,
                       fit: BoxFit.contain,
                       placeholder: (_, __) => const SizedBox.shrink(),
                       errorWidget: (_, __, ___) => const SizedBox.shrink(),
                     )
-                  : VehicleArtwork(vehicleKey: vehicleKey, width: artworkWidth),
+                  : VehicleArtwork(vehicleKey: vehicleKey, fit: BoxFit.contain),
             ),
           ],
-        ),
+          );
+        }),
       ),
     );
   }
@@ -1667,7 +1675,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _homeServiceTile(
         label: 'Bike',
         vehicleKey: 'bike',
-        imageUrl: 'https://res.cloudinary.com/kits/image/upload/e_make_transparent:15/q_auto/f_png/v1775123974/bike_logo_g7idrq.png',
         labelFontSize: 14 * textScale,
         onTap: () => Navigator.push(
           context,
@@ -1729,8 +1736,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         label: 'SUV / XL',
         vehicleKey: 'suv',
         labelFontSize: 12 * textScale,
-        artworkWidth: 72,
-        artworkRight: -8,
         onTap: () => Navigator.push(
           context,
           MaterialPageRoute(
