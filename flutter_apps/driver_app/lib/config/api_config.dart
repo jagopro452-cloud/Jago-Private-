@@ -167,6 +167,11 @@ class ApiConfig {
   // ── Eligible Services (vehicle-type based) ────────────────────────────
   static String get eligibleServices => '$baseUrl/api/app/driver/eligible-services';
 
+  // ── Vehicle Categories (Admin-configured; Ride + Parcel Service) ──────
+  // type: 'ride' | 'parcel' | 'pool' — filters to active categories only.
+  static String vehicleCategories({String? type}) =>
+      '$baseUrl/api/app/vehicle-categories${type != null ? '?type=$type' : ''}';
+
   // ── Module Revenue Config ─────────────────────────────────────────────
   static String get revenueConfig => '$baseUrl/api/app/revenue-config';
 

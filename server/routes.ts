@@ -14441,6 +14441,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (password && typeof password === 'string' && password.length >= 6) {
         passwordHash = await hashPassword(password);
       }
+      // serviceType lets the registration wizard register a dedicated Parcel
+      // Service vehicle (Bike Delivery, Tata Ace, Bolero Pickup, Tempo 407,
+      // etc. — whatever is configured active in vehicle_categories with
+      // service_type='parcel') instead of a Ride vehicle. Defaults to 'ride'
+      // so existing clients that never send it keep working unchanged.
+      const requestedServiceType = String(req.body.serviceType || 'ride').trim().toLowerCase();
+      const isParcelRegistration = requestedServiceType === 'parcel';
       const requestedVehicle = String(vehicleType || '').trim().toLowerCase();
       const canonicalVehicleType =
         requestedVehicle === 'mini' || requestedVehicle === 'car' ? 'mini_car' :
@@ -14453,21 +14460,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         sedan: 'sedan',
         suv: 'suv',
       };
-      const rideServiceKey = rideServiceByVehicle[canonicalVehicleType] || null;
+      // Parcel Service vehicle types come from the same Admin Panel
+      // (vehicle_categories.vehicle_type where service_type='parcel') — this
+      // allowlist only guards against a client submitting a value that isn't
+      // even shaped like a parcel vehicle key; the real source of truth is
+      // still the DB lookup below.
+      const parcelVehicleTypes = new Set([
+        'bike_parcel', 'auto_parcel', 'tata_ace', 'bolero_pickup', 'tempo_407',
+      ]);
+      const isKnownVehicleType = isParcelRegistration
+        ? parcelVehicleTypes.has(canonicalVehicleType)
+        : !!rideServiceByVehicle[canonicalVehicleType];
+      const rideServiceKey = !isParcelRegistration ? (rideServiceByVehicle[canonicalVehicleType] || null) : null;
       const driverGender = normalizeGender(rawGender);
-      const canCarryParcel = ['bike', 'auto'].includes(canonicalVehicleType);
+      const canCarryParcel = isParcelRegistration || ['bike', 'auto'].includes(canonicalVehicleType);
       const serviceEligibility = [
         ...(rideServiceKey ? [rideServiceKey] : []),
         ...(canCarryParcel ? ['parcel_delivery'] : []),
       ];
 
-      // A submitted vehicleType MUST resolve to a real, active ride category
-      // before anything is written — previously an unresolvable type silently
-      // wrote vehicle_category_id=NULL and still reported success, which is
-      // how drivers ended up "registered" with no working dispatch profile.
+      // A submitted vehicleType MUST resolve to a real, active category of
+      // the requested service type before anything is written — previously
+      // an unresolvable type silently wrote vehicle_category_id=NULL and
+      // still reported success, which is how drivers ended up "registered"
+      // with no working dispatch profile.
       let vehicleCategoryId: string | null = null;
       if (vehicleType) {
-        if (!rideServiceByVehicle[canonicalVehicleType]) {
+        if (!isKnownVehicleType) {
           return res.status(400).json({
             message: `Unsupported vehicle type "${vehicleType}"`,
             code: "INVALID_VEHICLE_TYPE",
@@ -14477,7 +14496,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           SELECT id
           FROM vehicle_categories
           WHERE is_active = true
-            AND service_type = 'ride'
+            AND service_type = ${isParcelRegistration ? 'parcel' : 'ride'}
             AND (
               vehicle_type = ${canonicalVehicleType}
               OR LOWER(name) = ${canonicalVehicleType.replace(/_/g, ' ')}

@@ -37,15 +37,19 @@ class _RegisterScreenState extends State<RegisterScreen> {
     "One quick photo to confirm it's you",
   ];
 
-  static const _vehicleTypeOptions = ['bike', 'auto', 'car', 'mini', 'sedan', 'suv', 'xl'];
-  static const _vehicleTypeIcons = {
+  static const _rideVehicleIcons = {
     'bike': Icons.two_wheeler_outlined,
     'auto': Icons.electric_rickshaw_outlined,
-    'car': Icons.directions_car_outlined,
-    'mini': Icons.directions_car_filled_outlined,
+    'mini_car': Icons.directions_car_filled_outlined,
     'sedan': Icons.directions_car_outlined,
     'suv': Icons.airport_shuttle_outlined,
-    'xl': Icons.local_taxi_outlined,
+  };
+  static const _parcelVehicleIcons = {
+    'bike_parcel': Icons.two_wheeler_outlined,
+    'auto_parcel': Icons.electric_rickshaw_outlined,
+    'tata_ace': Icons.local_shipping_outlined,
+    'bolero_pickup': Icons.local_shipping_outlined,
+    'tempo_407': Icons.local_shipping_outlined,
   };
 
   static const _selfieTips = [
@@ -75,9 +79,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _vehicleColorCtrl = TextEditingController();
   final _vehicleYearCtrl = TextEditingController();
   final _vehicleNumCtrl = TextEditingController();
-  String _vehicleType = 'bike';
+  String _serviceType = 'ride'; // 'ride' | 'parcel' — which Admin Panel category to register under
+  String? _vehicleType; // machine key of the selected vehicle_categories row, e.g. 'bike' or 'tata_ace'
   bool _carShareEnabled = false;
   bool _intercityEnabled = false;
+
+  // Vehicle types are fetched from the Admin Panel (vehicle_categories),
+  // cached per service type so switching Ride ↔ Parcel Service doesn't
+  // re-fetch every time.
+  final Map<String, List<Map<String, dynamic>>> _vehicleCategoriesCache = {};
+  bool _loadingCategories = true;
+  String? _categoriesError;
 
   // Step 4: Vehicle Documents
   File? _rcPhoto;
@@ -91,6 +103,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   void initState() {
     super.initState();
     _prefillPhone();
+    _loadVehicleCategories(_serviceType);
   }
 
   Future<void> _prefillPhone() async {
@@ -98,6 +111,68 @@ class _RegisterScreenState extends State<RegisterScreen> {
     setState(() {
       _phoneCtrl.text = prefs.getString('user_phone') ?? '';
     });
+  }
+
+  /// Fetches the Admin Panel-configured, active vehicle types for [serviceType]
+  /// ('ride' or 'parcel') via GET /api/app/vehicle-categories?type=... —
+  /// whatever the admin adds there shows up here automatically.
+  Future<void> _loadVehicleCategories(String serviceType) async {
+    final cached = _vehicleCategoriesCache[serviceType];
+    if (cached != null) {
+      setState(() {
+        _vehicleType = cached.isNotEmpty ? cached.first['vehicleType'] as String? : null;
+      });
+      return;
+    }
+    setState(() {
+      _loadingCategories = true;
+      _categoriesError = null;
+    });
+    try {
+      final res = await http.get(Uri.parse(ApiConfig.vehicleCategories(type: serviceType)));
+      if (res.statusCode != 200) throw Exception('status ${res.statusCode}');
+      final decoded = jsonDecode(res.body);
+      final list = (decoded as List)
+          .whereType<Map>()
+          .map((e) => e.cast<String, dynamic>())
+          .where((e) => e['vehicleType'] != null && (e['vehicleType'] as String).isNotEmpty)
+          .toList();
+      if (!mounted) return;
+      setState(() {
+        _vehicleCategoriesCache[serviceType] = list;
+        _loadingCategories = false;
+        _vehicleType = list.isNotEmpty ? list.first['vehicleType'] as String? : null;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loadingCategories = false;
+        _categoriesError = 'Could not load vehicle types. Check your connection and try again.';
+      });
+    }
+  }
+
+  void _selectServiceType(String type) {
+    if (_serviceType == type) return;
+    setState(() {
+      _serviceType = type;
+      _vehicleType = null;
+      // Reset ride-only capabilities when switching to Parcel Service.
+      if (type == 'parcel') {
+        _carShareEnabled = false;
+        _intercityEnabled = false;
+      }
+    });
+    _loadVehicleCategories(type);
+  }
+
+  IconData _iconForVehicleCategory(Map<String, dynamic> cat) {
+    final vt = (cat['vehicleType'] as String? ?? '').toLowerCase();
+    if (_rideVehicleIcons.containsKey(vt)) return _rideVehicleIcons[vt]!;
+    if (_parcelVehicleIcons.containsKey(vt)) return _parcelVehicleIcons[vt]!;
+    return (cat['serviceType'] as String? ?? 'ride') == 'parcel'
+        ? Icons.local_shipping_outlined
+        : Icons.directions_car_outlined;
   }
 
   @override
@@ -132,7 +207,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
       case 1:
         return _licenseNumCtrl.text.trim().isNotEmpty && _dlFront != null && _dlBack != null;
       case 2:
-        return _vehicleBrandCtrl.text.trim().isNotEmpty &&
+        return _vehicleType != null &&
+            _vehicleBrandCtrl.text.trim().isNotEmpty &&
             _vehicleModelCtrl.text.trim().isNotEmpty &&
             _vehicleColorCtrl.text.trim().isNotEmpty &&
             _vehicleYearCtrl.text.trim().length == 4 &&
@@ -248,6 +324,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
           'vehicleYear': int.tryParse(_vehicleYearCtrl.text.trim()),
           'vehicleNumber': _vehicleNumCtrl.text.trim().toUpperCase(),
           'vehicleType': _vehicleType,
+          'serviceType': _serviceType,
           'carShareEnabled': _carShareEnabled,
           'intercityEnabled': _intercityEnabled,
         }),
@@ -533,6 +610,23 @@ class _RegisterScreenState extends State<RegisterScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Text('Service Category', style: JT.bodyPrimary.copyWith(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 4),
+          Text('Choose what you want to register this vehicle for.', style: JT.caption),
+          const SizedBox(height: 10),
+          _serviceTypeToggle(),
+          const SizedBox(height: 20),
+          Text('Vehicle Type', style: JT.bodyPrimary.copyWith(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 4),
+          Text(
+            _serviceType == 'parcel'
+                ? 'Select the parcel vehicle you drive.'
+                : 'Select the ride vehicle you drive.',
+            style: JT.caption,
+          ),
+          const SizedBox(height: 10),
+          _vehicleTypeSection(),
+          const SizedBox(height: 20),
           _textField(
             label: 'Vehicle Brand',
             controller: _vehicleBrandCtrl,
@@ -577,26 +671,26 @@ class _RegisterScreenState extends State<RegisterScreen> {
             icon: Icons.numbers_outlined,
             capitalization: TextCapitalization.characters,
           ),
-          const SizedBox(height: 16),
-          _vehicleTypeField(),
-          const SizedBox(height: 16),
-          _capabilityToggle(
-            icon: Icons.people_alt_outlined,
-            title: 'Enable Car Share',
-            subtitle:
-                'Allow this vehicle to receive bookings where passengers reserve individual seats, in addition to normal full-vehicle bookings. You can change this anytime later from your profile.',
-            value: _carShareEnabled,
-            onChanged: (v) => setState(() => _carShareEnabled = v),
-          ),
-          const SizedBox(height: 14),
-          _capabilityToggle(
-            icon: Icons.alt_route_outlined,
-            title: 'Enable Intercity',
-            subtitle:
-                'Allow this vehicle to receive long-distance bookings between cities, where passengers reserve one or more seats or the whole vehicle. You can change this anytime later from your profile.',
-            value: _intercityEnabled,
-            onChanged: (v) => setState(() => _intercityEnabled = v),
-          ),
+          if (_serviceType == 'ride') ...[
+            const SizedBox(height: 16),
+            _capabilityToggle(
+              icon: Icons.people_alt_outlined,
+              title: 'Enable Car Share',
+              subtitle:
+                  'Allow this vehicle to receive bookings where passengers reserve individual seats, in addition to normal full-vehicle bookings. You can change this anytime later from your profile.',
+              value: _carShareEnabled,
+              onChanged: (v) => setState(() => _carShareEnabled = v),
+            ),
+            const SizedBox(height: 14),
+            _capabilityToggle(
+              icon: Icons.alt_route_outlined,
+              title: 'Enable Intercity',
+              subtitle:
+                  'Allow this vehicle to receive long-distance bookings between cities, where passengers reserve one or more seats or the whole vehicle. You can change this anytime later from your profile.',
+              value: _intercityEnabled,
+              onChanged: (v) => setState(() => _intercityEnabled = v),
+            ),
+          ],
         ],
       ),
     );
@@ -851,49 +945,184 @@ class _RegisterScreenState extends State<RegisterScreen> {
     if (d != null) setState(() => _dob = d);
   }
 
-  Widget _vehicleTypeField() {
+  Widget _serviceTypeToggle() {
+    Widget seg(String value, String label, IconData icon) {
+      final selected = _serviceType == value;
+      return Expanded(
+        child: GestureDetector(
+          onTap: _loading ? null : () => _selectServiceType(value),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            decoration: BoxDecoration(
+              color: selected ? JT.primary : Colors.transparent,
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 17, color: selected ? Colors.white : JT.textSecondary),
+                const SizedBox(width: 6),
+                Text(
+                  label,
+                  style: JT.bodyPrimary.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: selected ? Colors.white : JT.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
         color: JT.surfaceAlt,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: JT.border),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
+      child: Row(
         children: [
-          Text('Type of Vehicle', style: JT.caption),
-          DropdownButtonHideUnderline(
-            child: DropdownButton<String>(
-              value: _vehicleType,
-              isExpanded: true,
-              icon: Icon(Icons.keyboard_arrow_down_rounded, color: JT.iconInactive),
-              dropdownColor: Colors.white,
-              borderRadius: BorderRadius.circular(14),
-              items: _vehicleTypeOptions.map((s) => DropdownMenuItem(
-                value: s,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(_vehicleTypeIcons[s] ?? Icons.directions_car_outlined, size: 18, color: JT.primary),
-                    const SizedBox(width: 10),
-                    Text(_titleCase(s), style: JT.bodyPrimary),
-                  ],
-                ),
-              )).toList(),
-              onChanged: (v) => setState(() => _vehicleType = v!),
-            ),
-          ),
+          seg('ride', 'Ride', Icons.directions_car_outlined),
+          const SizedBox(width: 4),
+          seg('parcel', 'Parcel Service', Icons.local_shipping_outlined),
         ],
       ),
     );
   }
 
-  String _titleCase(String s) {
-    const upperAcronyms = {'suv', 'xl'};
-    if (upperAcronyms.contains(s)) return s.toUpperCase();
-    return s[0].toUpperCase() + s.substring(1);
+  Widget _vehicleTypeSection() {
+    final categories = _vehicleCategoriesCache[_serviceType];
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: JT.surfaceAlt,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: JT.border),
+      ),
+      child: _loadingCategories
+          ? const Padding(
+              padding: EdgeInsets.symmetric(vertical: 28),
+              child: Center(child: CircularProgressIndicator(strokeWidth: 2.5)),
+            )
+          : _categoriesError != null
+              ? Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Row(children: [
+                        Icon(Icons.error_outline, size: 16, color: JT.error),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text(_categoriesError!, style: JT.caption.copyWith(color: JT.error))),
+                      ]),
+                    ),
+                    const SizedBox(height: 4),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton(
+                        onPressed: () => _loadVehicleCategories(_serviceType),
+                        style: OutlinedButton.styleFrom(
+                          side: BorderSide(color: JT.primary.withValues(alpha: 0.4)),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        child: Text('Retry', style: TextStyle(color: JT.primary)),
+                      ),
+                    ),
+                  ],
+                )
+              : (categories == null || categories.isEmpty)
+                  ? Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 4),
+                      child: Row(children: [
+                        Icon(Icons.info_outline, size: 16, color: JT.iconInactive),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _serviceType == 'parcel'
+                                ? 'No Parcel Service vehicle types are configured yet. Please contact support.'
+                                : 'No vehicle types are configured yet. Please contact support.',
+                            style: JT.caption,
+                          ),
+                        ),
+                      ]),
+                    )
+                  : GridView.count(
+                      crossAxisCount: 2,
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      mainAxisSpacing: 10,
+                      crossAxisSpacing: 10,
+                      childAspectRatio: 1.5,
+                      children: categories.map(_vehicleCard).toList(),
+                    ),
+    );
+  }
+
+  Widget _vehicleCard(Map<String, dynamic> cat) {
+    final vehicleType = cat['vehicleType'] as String?;
+    final name = (cat['name'] as String?)?.trim();
+    final selected = _vehicleType != null && _vehicleType == vehicleType;
+    final rawIcon = (cat['icon'] as String?)?.trim();
+    final isImageIcon = rawIcon != null && (rawIcon.startsWith('http') || rawIcon.startsWith('/'));
+    final imageUrl = isImageIcon
+        ? (rawIcon.startsWith('http') ? rawIcon : '${ApiConfig.baseUrl}$rawIcon')
+        : null;
+    final isEmojiIcon = rawIcon != null && rawIcon.isNotEmpty && !isImageIcon;
+
+    return GestureDetector(
+      onTap: () => setState(() => _vehicleType = vehicleType),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+        decoration: BoxDecoration(
+          color: selected ? JT.primaryLight : Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: selected ? JT.primary : JT.border, width: selected ? 1.8 : 1),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              clipBehavior: Clip.antiAlias,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                border: Border.all(color: JT.border),
+              ),
+              child: imageUrl != null
+                  ? Image.network(
+                      imageUrl,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Icon(_iconForVehicleCategory(cat), color: JT.primary, size: 20),
+                    )
+                  : Center(
+                      child: isEmojiIcon
+                          ? Text(rawIcon, style: const TextStyle(fontSize: 18))
+                          : Icon(_iconForVehicleCategory(cat), color: JT.primary, size: 20),
+                    ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              name?.isNotEmpty == true ? name! : (vehicleType ?? ''),
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: JT.caption.copyWith(
+                fontSize: 12,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                color: selected ? JT.primary : JT.textPrimary,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _capabilityToggle({
