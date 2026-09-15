@@ -171,6 +171,12 @@ export async function notifyDriverNewRide(opts: {
     dataOnly: true, // background handler shows full-screen intent
     data: {
       type: "new_trip",
+      // serviceType/notificationType let the driver app safely ignore an
+      // alert it isn't registered for (e.g. a Parcel-only driver receiving
+      // a stray Ride alert) as a client-side safety net on top of
+      // server-side dispatch filtering.
+      serviceType: "ride",
+      notificationType: "ride_booking_request",
       tripId: opts.tripId,
       customerName: opts.customerName,
       pickupAddress: opts.pickupAddress,
@@ -204,6 +210,8 @@ export async function notifyDriverNewParcel(opts: {
     dataOnly: true, // background handler shows full-screen intent
     data: {
       type: "new_parcel",
+      serviceType: "parcel",
+      notificationType: "parcel_booking_request",
       orderId: opts.orderId,
       pickupAddress: opts.pickupAddress,
       totalFare: String(opts.totalFare),

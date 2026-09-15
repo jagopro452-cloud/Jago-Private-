@@ -125,6 +125,7 @@ import {
   findParcelCapableDrivers,
   findParcelCapableDriversDetailed,
   initParcelAdvancedTables,
+  resolveAllowedCategoryIds,
 } from "./parcel-advanced";
 import { initialParcelPaymentStatus, settledParcelPaymentStatus } from "./parcel-state";
 import {
@@ -212,6 +213,7 @@ import {
   isDriverEligibleForDispatch,
   resolveDispatchRequirementsFromTrip,
 } from "./dispatch-eligibility";
+import { canReceiveParcelBooking } from "./service-eligibility";
 import { assertDriverCanAcceptRideTrip, enforceDriverRevenuePolicy } from "./revenue-policy";
 import {
   startAIMobilityBrain,
@@ -14449,6 +14451,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const requestedServiceType = String(req.body.serviceType || 'ride').trim().toLowerCase();
       const isParcelRegistration = requestedServiceType === 'parcel';
       const requestedVehicle = String(vehicleType || '').trim().toLowerCase();
+      // The driver app also sends vehicleCategoryId — the exact
+      // vehicle_categories.id the driver tapped in the Admin-Panel-driven
+      // grid. Some Parcel categories were configured in the Admin Panel with
+      // a vehicle_type slug that collides with a Ride category's slug (e.g.
+      // a "Parcel Auto/3-Wheeler" row saved with vehicle_type='auto' instead
+      // of 'auto_parcel') — resolving by id sidesteps that ambiguity
+      // entirely instead of guessing from a human-typed slug.
+      const requestedVehicleCategoryId = req.body.vehicleCategoryId
+        ? String(req.body.vehicleCategoryId).trim()
+        : null;
       const canonicalVehicleType =
         requestedVehicle === 'mini' || requestedVehicle === 'car' ? 'mini_car' :
         requestedVehicle === 'xl' ? 'suv' :
@@ -14460,43 +14472,81 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         sedan: 'sedan',
         suv: 'suv',
       };
-      // Parcel Service vehicle types come from the same Admin Panel
-      // (vehicle_categories.vehicle_type where service_type='parcel') — this
-      // allowlist only guards against a client submitting a value that isn't
-      // even shaped like a parcel vehicle key; the real source of truth is
-      // still the DB lookup below.
-      const parcelVehicleTypes = new Set([
-        'bike_parcel', 'auto_parcel', 'tata_ace', 'bolero_pickup', 'tempo_407',
-      ]);
-      const isKnownVehicleType = isParcelRegistration
-        ? parcelVehicleTypes.has(canonicalVehicleType)
-        : !!rideServiceByVehicle[canonicalVehicleType];
       const rideServiceKey = !isParcelRegistration ? (rideServiceByVehicle[canonicalVehicleType] || null) : null;
       const driverGender = normalizeGender(rawGender);
-      const canCarryParcel = isParcelRegistration || ['bike', 'auto'].includes(canonicalVehicleType);
+      // Business rule: Ride Bike is the ONLY Ride vehicle that also receives
+      // Parcel alerts (see server/service-eligibility.ts). Ride Auto/Cab/
+      // Sedan/Mini/SUV never do — this previously included 'auto' here,
+      // which incorrectly granted every Ride Auto driver parcel eligibility.
+      const canCarryParcel = isParcelRegistration || canonicalVehicleType === 'bike';
       const serviceEligibility = [
         ...(rideServiceKey ? [rideServiceKey] : []),
         ...(canCarryParcel ? ['parcel_delivery'] : []),
       ];
+      console.log(
+        `[update-registration] serviceType=${requestedServiceType} vehicleType=${canonicalVehicleType || '(none)'} ` +
+        `vehicleCategoryId=${requestedVehicleCategoryId || '(none)'} driverId=${user.id}`
+      );
 
-      // A submitted vehicleType MUST resolve to a real, active category of
-      // the requested service type before anything is written — previously
-      // an unresolvable type silently wrote vehicle_category_id=NULL and
-      // still reported success, which is how drivers ended up "registered"
-      // with no working dispatch profile.
+      // Whether a vehicle_categories row counts as "parcel" — mirrors the
+      // matching used by GET /api/app/vehicle-categories?type=parcel so a
+      // row that lists there always resolves the same way here, even if an
+      // admin left service_type at its 'ride' default and only set
+      // type='parcel' (or vice versa for cargo).
+      const parcelRowPredicate = rawSql`(LOWER(COALESCE(service_type, '')) IN ('parcel', 'cargo') OR LOWER(COALESCE(type, '')) IN ('parcel', 'cargo'))`;
+      const rideRowPredicate = rawSql`(LOWER(COALESCE(service_type, 'ride')) NOT IN ('parcel', 'cargo') AND LOWER(COALESCE(type, '')) NOT IN ('parcel', 'cargo'))`;
+      const serviceRowPredicate = isParcelRegistration ? parcelRowPredicate : rideRowPredicate;
+
+      // A submitted vehicle MUST resolve to a real, active category of the
+      // requested service type before anything is written — previously an
+      // unresolvable type silently wrote vehicle_category_id=NULL and still
+      // reported success, which is how drivers ended up "registered" with no
+      // working dispatch profile.
       let vehicleCategoryId: string | null = null;
-      if (vehicleType) {
-        if (!isKnownVehicleType) {
+      if (requestedVehicleCategoryId) {
+        const byIdR = await rawDb.execute(rawSql`
+          SELECT id, name, service_type, type
+          FROM vehicle_categories
+          WHERE id = ${requestedVehicleCategoryId}::uuid AND is_active = true
+          LIMIT 1
+        `);
+        const row = byIdR.rows[0] as any;
+        if (!row) {
+          return res.status(409).json({
+            message: `Selected vehicle category is no longer available. Please pick again.`,
+            code: "VEHICLE_CATEGORY_NOT_CONFIGURED",
+          });
+        }
+        const rowIsParcel = ['parcel', 'cargo'].includes(String(row.service_type || '').toLowerCase())
+          || ['parcel', 'cargo'].includes(String(row.type || '').toLowerCase());
+        if (rowIsParcel !== isParcelRegistration) {
+          return res.status(400).json({
+            message: `Selected vehicle category does not belong to ${isParcelRegistration ? 'Parcel Service' : 'Ride'}.`,
+            code: "SERVICE_TYPE_MISMATCH",
+          });
+        }
+        console.log(`[update-registration] resolved by id -> categoryName=${row.name} categoryId=${row.id}`);
+        vehicleCategoryId = row.id;
+      } else if (vehicleType) {
+        // Legacy fallback for clients that only send the slug/name. Parcel
+        // vehicle types are entirely Admin-Panel-configured (no fixed slug
+        // list here) — a hardcoded allowlist previously rejected any parcel
+        // category whose slug didn't exactly match a handful of assumed
+        // names (e.g. 'auto_parcel'), even when the DB had a perfectly valid
+        // active parcel category under a different slug. The DB lookup below
+        // is the sole source of truth for both service types; this only
+        // rejects a value that isn't even shaped like a vehicle_type slug.
+        if (!/^[a-z0-9_]{2,50}$/.test(canonicalVehicleType)) {
           return res.status(400).json({
             message: `Unsupported vehicle type "${vehicleType}"`,
             code: "INVALID_VEHICLE_TYPE",
           });
         }
         const categoryR = await rawDb.execute(rawSql`
-          SELECT id
+          SELECT id, name
           FROM vehicle_categories
           WHERE is_active = true
-            AND service_type = ${isParcelRegistration ? 'parcel' : 'ride'}
+            AND ${serviceRowPredicate}
             AND (
               vehicle_type = ${canonicalVehicleType}
               OR LOWER(name) = ${canonicalVehicleType.replace(/_/g, ' ')}
@@ -14504,13 +14554,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           ORDER BY name
           LIMIT 1
         `);
-        vehicleCategoryId = (categoryR.rows[0] as any)?.id || null;
+        const row = categoryR.rows[0] as any;
+        vehicleCategoryId = row?.id || null;
         if (!vehicleCategoryId) {
           return res.status(409).json({
             message: `No active "${canonicalVehicleType}" vehicle category is configured. Contact support.`,
             code: "VEHICLE_CATEGORY_NOT_CONFIGURED",
           });
         }
+        console.log(`[update-registration] resolved by slug -> categoryName=${row.name} categoryId=${vehicleCategoryId}`);
       }
 
       // users profile fields + driver_details vehicle mapping are persisted
@@ -15059,6 +15111,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const driverInfo = await rawDb.execute(rawSql`
         SELECT dd.vehicle_category_id, dd.availability_status, dd.car_share_enabled,
           vc.name as vehicle_category_name, vc.icon as vehicle_category_icon, vc.type as vehicle_type,
+          vc.vehicle_type as vehicle_type_slug, COALESCE(vc.service_type, 'ride') as service_type,
           z.name as zone_name, dl.is_online,
           u.vehicle_number, u.vehicle_model
         FROM users u
@@ -15107,6 +15160,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         vehicleCategory: di.vehicleCategoryName || null,
         vehicleIcon: di.vehicleCategoryIcon || null,
         vehicleType: di.vehicleType || null,
+        // vehicleTypeSlug/serviceType — the driver's own registered vehicle
+        // slug (e.g. 'bike', 'tempo_407') and service ('ride'/'parcel').
+        // Cached client-side so the app can locally sanity-check an incoming
+        // alert's serviceType before showing it (defense-in-depth on top of
+        // server-side dispatch filtering).
+        vehicleTypeSlug: di.vehicleTypeSlug || null,
+        serviceType: di.serviceType || 'ride',
         vehicleNumber: di.vehicleNumber || null,
         vehicleModel: di.vehicleModel || null,
         zone: di.zoneName || null,
@@ -17333,6 +17393,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 
           const payload = {
             orderId: order.id,
+            // serviceType/notificationType let the driver app safely ignore
+            // this alert if it isn't registered for Parcel (client-side
+            // safety net on top of server-side dispatch filtering).
+            serviceType: "parcel",
+            notificationType: "parcel_booking_request",
             vehicleCategory,
             pickupAddress,
             pickupLat, pickupLng,
@@ -17600,6 +17665,60 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
       if ((activeParcel.rows as any[]).length) {
         return res.status(409).json({ message: 'Finish your current parcel order before accepting another one.', code: 'DRIVER_BUSY_WITH_PARCEL' });
       }
+
+      // Re-validate service/vehicle eligibility at acceptance time — this
+      // endpoint previously had NO such check, so any authenticated driver
+      // (e.g. a Ride Auto driver, or a Parcel Bike Delivery driver) could
+      // manually call it and claim a parcel order they were never dispatched
+      // for. Mirrors the same two checks dispatch itself already applies:
+      // (1) the driver's own service/vehicle qualifies for Parcel at all
+      // (server/service-eligibility.ts — includes the Ride-Bike exception),
+      // and (2) the driver's specific registered category matches the
+      // order's requested parcel vehicle class (server/parcel-advanced.ts's
+      // resolveAllowedCategoryIds — the same resolver dispatch used to pick
+      // candidates in the first place).
+      const pendingOrderR = await rawDb.execute(rawSql`
+        SELECT id, vehicle_category
+        FROM parcel_orders
+        WHERE id=${req.params.id}::uuid AND current_status='searching' AND driver_id IS NULL
+        LIMIT 1
+      `);
+      const pendingOrder = (pendingOrderR.rows as any[])[0];
+      if (!pendingOrder) return res.status(409).json({ message: 'Already assigned' });
+
+      const driverProfile = await getDriverDispatchProfile(driverId);
+      if (!driverProfile) {
+        return res.status(404).json({ message: 'Driver profile not found' });
+      }
+      const driverServiceType = ['parcel', 'cargo'].includes(String(driverProfile.categoryServiceType || '').toLowerCase())
+        ? 'parcel'
+        : 'ride';
+      const eligibleForParcelService = canReceiveParcelBooking({
+        isApproved: ['approved', 'verified'].includes(driverProfile.approvalState),
+        isOnline: driverProfile.isOnline,
+        isAvailable: driverProfile.isActive && !driverProfile.isLocked && !driverProfile.hasActiveTrip,
+        serviceType: driverServiceType,
+        vehicleType: driverProfile.vehicleCategoryKey,
+        parcelEligibility: driverProfile.parcelEligibility,
+      });
+      const allowedCategoryIds = eligibleForParcelService
+        ? await resolveAllowedCategoryIds(String(pendingOrder.vehicle_category || ''))
+        : [];
+      const vehicleClassMatches = !!driverProfile.vehicleCategoryId
+        && allowedCategoryIds.includes(driverProfile.vehicleCategoryId);
+      console.log(
+        `[PARCEL_ACCEPT] orderId=${pendingOrder.id} driverId=${driverId} ` +
+        `driverServiceType=${driverServiceType} driverVehicleCategory=${driverProfile.vehicleCategoryKey || '(none)'} ` +
+        `orderVehicleCategory=${pendingOrder.vehicle_category} eligibleForParcelService=${eligibleForParcelService} ` +
+        `vehicleClassMatches=${vehicleClassMatches}`
+      );
+      if (!eligibleForParcelService || !vehicleClassMatches) {
+        return res.status(403).json({
+          message: 'You are not eligible for this booking service.',
+          code: 'SERVICE_NOT_ELIGIBLE',
+        });
+      }
+
       const r = await rawDb.execute(rawSql`
         UPDATE parcel_orders
         SET driver_id=${driverId}::uuid, current_status='driver_assigned', updated_at=NOW()

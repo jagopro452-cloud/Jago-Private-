@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/api_config.dart';
 import 'auth_service.dart';
+import 'driver_eligibility.dart';
 
 const String _tripAlertChannelId = 'trip_alerts_v2';
 const String _tripAlertChannelName = 'Trip Alerts';
@@ -183,6 +184,14 @@ Future<void> firebaseBackgroundMessageHandler(RemoteMessage message) async {
   final data = Map<String, dynamic>.from(message.data);
   if (!_isDriverAlert(data)) return;
 
+  // Client-side safety net (see driver_eligibility.dart) on top of
+  // server-side dispatch filtering — e.g. a Ride Auto driver must never be
+  // shown a Parcel alert even if one is somehow ever misrouted.
+  if (!await DriverEligibility.canReceive(data['serviceType'] as String?)) {
+    debugPrint('[FCM-BG] dropped alert — serviceType=${data['serviceType']} not eligible for this driver');
+    return;
+  }
+
   debugPrint('[FCM-BG] incoming driver alert ${data['type']}');
   await _persistPendingAlert(data);
 
@@ -287,12 +296,18 @@ class FcmService {
     }
   }
 
-  void _onForegroundMessage(RemoteMessage message) {
+  void _onForegroundMessage(RemoteMessage message) async {
     final type = message.data['type'] ?? '';
     debugPrint('[FCM-FG] type=$type');
 
     if (type == 'new_trip' || type == 'new_parcel') {
       final data = Map<String, dynamic>.from(message.data);
+      // Client-side safety net (see driver_eligibility.dart) on top of
+      // server-side dispatch filtering.
+      if (!await DriverEligibility.canReceive(data['serviceType'] as String?)) {
+        debugPrint('[FCM-FG] dropped alert — serviceType=${data['serviceType']} not eligible for this driver');
+        return;
+      }
       _persistPendingAlert(data);
       _showDriverAlertNotification(_localNotif, data);
       _foregroundAlertController.add(data);

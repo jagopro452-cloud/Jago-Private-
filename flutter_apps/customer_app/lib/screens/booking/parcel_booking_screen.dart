@@ -1073,127 +1073,16 @@ class _ParcelBookingScreenState extends State<ParcelBookingScreen>
           ),
           const SizedBox(height: 4),
           Text(
-            'Select based on your package size and weight',
+            'Select based on your package weight',
             style: GoogleFonts.poppins(
               fontSize: 14,
               color: const Color(0xFF6B7280),
             ),
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 20),
 
-          // Vehicle list
-          ...List.generate(_vehicles.length, (idx) {
-            final v = _vehicles[idx];
-            final isSelected = _vehicleIdx == idx;
-            return GestureDetector(
-              onTap: () => setState(() => _vehicleIdx = idx),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                margin: const EdgeInsets.only(bottom: 14),
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: isSelected ? logisticsOrange.withValues(alpha: 0.05) : Colors.white,
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(
-                    color: isSelected ? logisticsOrange : const Color(0xFFE5E7EB).withValues(alpha: 0.8),
-                    width: isSelected ? 1.5 : 1,
-                  ),
-                  boxShadow: isSelected
-                    ? [BoxShadow(color: logisticsOrange.withValues(alpha: 0.16), blurRadius: 16, offset: const Offset(0, 6))]
-                    : [BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 6, offset: const Offset(0, 2))],
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      width: 58,
-                      height: 58,
-                      decoration: BoxDecoration(
-                        color: v.accentColor.withValues(alpha: 0.08),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: Center(
-                        child: _buildVehicleImage(v.key),
-                      ),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Flexible(
-                                child: Text(
-                                  v.name,
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w600,
-                                    color: const Color(0xFF111827),
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              const SizedBox(width: 6),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: v.accentColor.withValues(alpha: 0.1),
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                child: Text(
-                                  v.capacity,
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.w600,
-                                    color: v.accentColor,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            v.subtitle,
-                            style: GoogleFonts.poppins(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w500,
-                              color: const Color(0xFF4B5563),
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            v.suitable,
-                            style: GoogleFonts.poppins(
-                              fontSize: 12,
-                              color: const Color(0xFF9CA3AF),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Container(
-                      width: 20,
-                      height: 20,
-                      margin: const EdgeInsets.only(top: 4),
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: isSelected ? logisticsOrange : Colors.white,
-                        border: Border.all(
-                          color: isSelected ? logisticsOrange : const Color(0xFFD1D5DB),
-                          width: 1.5,
-                        ),
-                      ),
-                      child: isSelected 
-                        ? const Icon(Icons.check, color: Colors.white, size: 14)
-                        : null,
-                    ),
-                  ],
-                ),
-              ),
-            );
-          }),
+          // Compact 2-column vehicle grid
+          _buildVehicleGrid(),
 
           const SizedBox(height: 20),
 
@@ -1239,6 +1128,114 @@ class _ParcelBookingScreenState extends State<ParcelBookingScreen>
           ),
           const SizedBox(height: 24), // Spacing for bottom button
         ],
+      ),
+    );
+  }
+
+  // Compact 2-column vehicle grid — pairs vehicles two per row.
+  Widget _buildVehicleGrid() {
+    final rows = <Widget>[];
+    for (int i = 0; i < _vehicles.length; i += 2) {
+      final hasSecond = i + 1 < _vehicles.length;
+      rows.add(Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: _buildVehicleGridCard(_vehicles[i], i)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: hasSecond
+                  ? _buildVehicleGridCard(_vehicles[i + 1], i + 1)
+                  : const SizedBox.shrink(),
+            ),
+          ],
+        ),
+      ));
+    }
+    return Column(children: rows);
+  }
+
+  Widget _buildVehicleGridCard(_ParcelVehicle v, int idx) {
+    final isSelected = _vehicleIdx == idx;
+    return GestureDetector(
+      onTap: () => setState(() => _vehicleIdx = idx),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        decoration: BoxDecoration(
+          color: isSelected ? logisticsOrange.withValues(alpha: 0.07) : Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isSelected ? logisticsOrange : const Color(0xFFE5E7EB).withValues(alpha: 0.9),
+            width: isSelected ? 1.6 : 1,
+          ),
+          boxShadow: isSelected
+              ? [BoxShadow(color: logisticsOrange.withValues(alpha: 0.16), blurRadius: 14, offset: const Offset(0, 5))]
+              : [BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 6, offset: const Offset(0, 2))],
+        ),
+        child: Stack(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 14, 12, 12),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    height: 74,
+                    child: Center(child: _buildVehicleImage(v.key, width: 70, height: 70)),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    v.name,
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    style: GoogleFonts.poppins(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w600,
+                      color: const Color(0xFF111827),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: (isSelected ? logisticsOrange : v.accentColor).withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      v.capacity,
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.poppins(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w600,
+                        color: isSelected ? logisticsOrange : v.accentColor,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Positioned(
+              top: 8,
+              right: 8,
+              child: Container(
+                width: 18,
+                height: 18,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: isSelected ? logisticsOrange : Colors.white,
+                  border: Border.all(
+                    color: isSelected ? logisticsOrange : const Color(0xFFD1D5DB),
+                    width: 1.4,
+                  ),
+                ),
+                child: isSelected
+                    ? const Icon(Icons.check, color: Colors.white, size: 12)
+                    : null,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1822,7 +1819,7 @@ class _ParcelBookingScreenState extends State<ParcelBookingScreen>
     String label = '';
     
     switch (_step) {
-      case 0: label = 'Confirm ${_vehicle.name}'; break;
+      case 0: label = 'Continue'; break;
       case 1: label = 'Add Package Details'; break;
       case 2: label = 'Review & Book'; break;
       case 3: label = 'Book My Delivery'; break;

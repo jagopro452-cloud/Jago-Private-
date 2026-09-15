@@ -18,6 +18,7 @@ import '../../services/auth_service.dart';
 import '../../services/socket_service.dart';
 import '../../services/vehicle_status_service.dart';
 import '../../services/alarm_service.dart';
+import '../../services/driver_eligibility.dart';
 import '../../services/online_keepalive_service.dart';
 import '../../widgets/incoming_offers_overlay.dart';
 import '../../services/fcm_service.dart';
@@ -846,6 +847,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin, 
           _vehicleModel = data['vehicleModel'] ?? '';
           _driverRating = double.tryParse(data['rating']?.toString() ?? '') ?? _driverRating;
         });
+        // Cache this driver's own serviceType/vehicleType slug so
+        // DriverEligibility (fcm_service.dart, socket_service.dart) can
+        // sanity-check an incoming Ride/Parcel alert client-side.
+        DriverEligibility.cache(
+          serviceType: (data['serviceType'] ?? 'ride').toString(),
+          vehicleType: (data['vehicleTypeSlug'] ?? '').toString(),
+        );
         // TEMP DEBUG — trace the Car Share "vanishing button" report: dump
         // every field that feeds _isCabOrCarCategory/_driverMode/_buildModeSelector
         // right after each dashboard sync so a bad fetch is visible in logs.

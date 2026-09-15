@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../config/api_config.dart';
 import '../../config/jago_theme.dart';
 import '../../services/auth_service.dart';
+import '../../services/driver_eligibility.dart';
 import 'pending_verification_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
@@ -81,6 +82,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _vehicleNumCtrl = TextEditingController();
   String _serviceType = 'ride'; // 'ride' | 'parcel' — which Admin Panel category to register under
   String? _vehicleType; // machine key of the selected vehicle_categories row, e.g. 'bike' or 'tata_ace'
+  // Full selected vehicle_categories row (not just its name/slug) — its
+  // 'id' is sent to the backend so a Parcel category whose vehicle_type
+  // slug happens to collide with a Ride category's slug (e.g. both saved
+  // as 'auto') still resolves to the exact row the driver tapped, instead
+  // of being guessed from the slug alone.
+  Map<String, dynamic>? _selectedCategory;
   bool _carShareEnabled = false;
   bool _intercityEnabled = false;
 
@@ -120,6 +127,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     final cached = _vehicleCategoriesCache[serviceType];
     if (cached != null) {
       setState(() {
+        _selectedCategory = cached.isNotEmpty ? cached.first : null;
         _vehicleType = cached.isNotEmpty ? cached.first['vehicleType'] as String? : null;
       });
       return;
@@ -141,6 +149,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       setState(() {
         _vehicleCategoriesCache[serviceType] = list;
         _loadingCategories = false;
+        _selectedCategory = list.isNotEmpty ? list.first : null;
         _vehicleType = list.isNotEmpty ? list.first['vehicleType'] as String? : null;
       });
     } catch (_) {
@@ -157,6 +166,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     setState(() {
       _serviceType = type;
       _vehicleType = null;
+      _selectedCategory = null;
       // Reset ride-only capabilities when switching to Parcel Service.
       if (type == 'parcel') {
         _carShareEnabled = false;
@@ -311,23 +321,35 @@ class _RegisterScreenState extends State<RegisterScreen> {
       final headers = {...authHeaders, 'Content-Type': 'application/json'};
 
       // 1. Update Profile Fields
+      final vehicleCategoryId = _selectedCategory?['id'] as String?;
+      final vehicleCategoryName = _selectedCategory?['name'] as String?;
+      // Safe to log: service type, category name/slug/id and non-document
+      // profile fields only — never tokens, documents, or selfie data.
+      debugPrint(
+        '[register_screen] submit serviceType=$_serviceType '
+        'selectedCategoryName=$vehicleCategoryName vehicleTypeSlug=$_vehicleType '
+        'vehicleCategoryId=$vehicleCategoryId',
+      );
+      final profilePayload = {
+        'name': _nameCtrl.text.trim(),
+        'dob': _dob?.toIso8601String(),
+        'licenseNumber': _licenseNumCtrl.text.trim(),
+        'vehicleBrand': _vehicleBrandCtrl.text.trim(),
+        'vehicleModel': _vehicleModelCtrl.text.trim(),
+        'vehicleColor': _vehicleColorCtrl.text.trim(),
+        'vehicleYear': int.tryParse(_vehicleYearCtrl.text.trim()),
+        'vehicleNumber': _vehicleNumCtrl.text.trim().toUpperCase(),
+        'vehicleType': _vehicleType,
+        'vehicleCategoryId': vehicleCategoryId,
+        'serviceType': _serviceType,
+        'carShareEnabled': _carShareEnabled,
+        'intercityEnabled': _intercityEnabled,
+      };
+      debugPrint('[register_screen] update-registration payload=${jsonEncode(profilePayload)}');
       final profileRes = await http.patch(
         Uri.parse('${ApiConfig.baseUrl}/api/app/driver/update-registration'),
         headers: headers,
-        body: jsonEncode({
-          'name': _nameCtrl.text.trim(),
-          'dob': _dob?.toIso8601String(),
-          'licenseNumber': _licenseNumCtrl.text.trim(),
-          'vehicleBrand': _vehicleBrandCtrl.text.trim(),
-          'vehicleModel': _vehicleModelCtrl.text.trim(),
-          'vehicleColor': _vehicleColorCtrl.text.trim(),
-          'vehicleYear': int.tryParse(_vehicleYearCtrl.text.trim()),
-          'vehicleNumber': _vehicleNumCtrl.text.trim().toUpperCase(),
-          'vehicleType': _vehicleType,
-          'serviceType': _serviceType,
-          'carShareEnabled': _carShareEnabled,
-          'intercityEnabled': _intercityEnabled,
-        }),
+        body: jsonEncode(profilePayload),
       );
 
       if (profileRes.statusCode != 200) {
@@ -340,6 +362,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
         } catch (_) {}
         throw Exception(msg);
       }
+
+      // Cache this driver's own serviceType/vehicleType immediately, so the
+      // very first Ride/Parcel alert after onboarding is already correctly
+      // filtered by DriverEligibility without waiting for the first
+      // dashboard fetch on Home.
+      DriverEligibility.cache(serviceType: _serviceType, vehicleType: _vehicleType);
 
       // 2. Upload Documents
       final docs = {
@@ -1074,7 +1102,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
     final isEmojiIcon = rawIcon != null && rawIcon.isNotEmpty && !isImageIcon;
 
     return GestureDetector(
-      onTap: () => setState(() => _vehicleType = vehicleType),
+      onTap: () => setState(() {
+        _vehicleType = vehicleType;
+        _selectedCategory = cat;
+      }),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 160),
         padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),

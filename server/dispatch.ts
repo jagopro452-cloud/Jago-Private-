@@ -681,6 +681,14 @@ async function broadcastToAllDrivers(session: DispatchSession, drivers: DriverMa
       const payload = {
         tripId: session.tripId,
         ...session.tripMeta,
+        // dispatch.ts only ever dispatches Ride-family bookings (normal,
+        // pool, outstation, intercity) — Parcel dispatch is a fully separate
+        // path (see routes.ts's /api/app/parcel/book handler). serviceType/
+        // notificationType let the driver app safely ignore this alert if it
+        // somehow isn't registered for Ride, as a client-side safety net on
+        // top of server-side dispatch filtering.
+        serviceType: "ride",
+        notificationType: "ride_booking_request",
         vehicleCategoryId: session.vehicleCategoryId || null,
         vehicleCategoryName: session.tripMeta.vehicleCategoryName || null,
         vehicleCategory: session.tripMeta.vehicleCategoryName || null,

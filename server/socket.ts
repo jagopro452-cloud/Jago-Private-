@@ -1930,6 +1930,10 @@ export async function notifyNearbyDriversNewTrip(
       const driverId = (row as any).driverId;
       const payload = {
         tripId,
+        // This is the Ride re-notify/retry path (trip_requests) — never
+        // used for Parcel, which has its own dispatch (parcel-advanced.ts).
+        serviceType: "ride",
+        notificationType: "ride_booking_request",
         refId: trip.refId,
         customerName: trip.customerName,
         pickupAddress: trip.pickupAddress,

@@ -488,16 +488,20 @@ export function emitParcelLifecycle(
  * vehicle_categories.name / slug. NO fuzzy fallback — a parcel key with no
  * mapping is rejected outright.
  *
- * bike_parcel/auto_parcel also accept the plain ride categories ("bike",
- * "auto") — a driver's own two-wheeler/three-wheeler physically doubles as
- * a delivery vehicle for small/medium parcels, so ride-only drivers are
- * parcel-eligible for these two without needing separate onboarding. The
- * cargo-only categories (Tata Ace, Bolero, Tempo 407) stay strict — no
- * passenger ride category uses that vehicle class.
+ * bike_parcel is the ONLY key that also accepts the plain Ride category
+ * ("bike") — this is the single approved cross-service exception (see
+ * server/service-eligibility.ts): a driver registered for normal Ride
+ * Service under Bike also carries small parcels without separate
+ * onboarding. auto_parcel intentionally does NOT accept plain "auto" — a
+ * Ride Auto driver must never receive Parcel alerts (confirmed business
+ * rule; a prior version of this map included "auto" here, which routed
+ * Parcel Auto/3-Wheeler bookings to Ride Auto drivers). The cargo-only
+ * categories (Tata Ace, Bolero, Tempo 407) stay strict — no passenger ride
+ * category uses that vehicle class.
  */
 const PARCEL_VEHICLE_DRIVER_MAP: Record<string, string[]> = {
   bike_parcel:   ["bike_parcel", "bike parcel", "parcel_bike", "bike_delivery", "bike delivery", "bike"],
-  auto_parcel:   ["auto_parcel", "auto parcel", "parcel_auto", "auto_delivery", "auto delivery", "mini_cargo_auto", "auto"],
+  auto_parcel:   ["auto_parcel", "auto parcel", "parcel_auto", "auto_delivery", "auto delivery", "mini_cargo_auto"],
   tata_ace:      ["tata_ace", "tata ace"],
   pickup_truck:  ["pickup_truck", "pickup truck"],
   bolero_cargo:  ["bolero_cargo", "bolero pickup", "bolero cargo"],
@@ -509,7 +513,7 @@ const PARCEL_VEHICLE_DRIVER_MAP: Record<string, string[]> = {
 const VC_ID_CACHE = new Map<string, { ids: string[]; expiresAt: number }>();
 const VC_CACHE_TTL_MS = 60_000;
 
-async function resolveAllowedCategoryIds(parcelKey: string): Promise<string[]> {
+export async function resolveAllowedCategoryIds(parcelKey: string): Promise<string[]> {
   const cached = VC_ID_CACHE.get(parcelKey);
   if (cached && cached.expiresAt > Date.now()) return cached.ids;
 

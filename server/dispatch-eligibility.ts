@@ -4,6 +4,7 @@ import {
   getMatchingDriverCategoryIds,
   getPlatformServiceKeyForCategory,
   getVehicleCategoryMeta,
+  isParcelOnlyVehicle,
   normalizeVehicleKey,
 } from "./vehicle-matching";
 import { driverHasActiveSubscription, getRidesRevenueModel } from "./revenue-policy";
@@ -40,6 +41,8 @@ export interface DriverDispatchProfile {
   vehicleCategoryId: string | null;
   vehicleCategoryKey: string | null;
   vehicleSubcategoryKey: string | null;
+  /** vehicle_categories.service_type for the driver's own registered category ('ride'/'parcel'/'pool'/...) */
+  categoryServiceType: string | null;
   serviceEligibility: string[];
   parcelEligibility: boolean;
   poolEligibility: boolean;
@@ -326,6 +329,7 @@ export async function getDriverDispatchProfile(driverId: string): Promise<Driver
     vehicleCategoryId: row.vehicle_category_id || null,
     vehicleCategoryKey: vehicleCategoryKey || null,
     vehicleSubcategoryKey: normalizeVehicleKey(row.vehicle_subcategory || "") || null,
+    categoryServiceType: categoryMeta?.serviceType || row.category_service_type || null,
     serviceEligibility: Array.from(new Set(serviceEligibility)),
     parcelEligibility,
     poolEligibility,
@@ -384,6 +388,7 @@ function buildProfileFromCandidateRow(row: any): DriverDispatchProfile {
     vehicleCategoryId: row.vehicle_category_id || null,
     vehicleCategoryKey: vehicleCategoryKey || null,
     vehicleSubcategoryKey: normalizeVehicleKey(row.vehicle_subcategory || "") || null,
+    categoryServiceType: categoryServiceType || null,
     serviceEligibility: Array.from(new Set(serviceEligibility)),
     parcelEligibility,
     poolEligibility,
@@ -425,10 +430,7 @@ function checkProfileEligibility(
   ) {
     return { eligible: false, reason: "vehicle_category_mismatch" };
   }
-  const driverVehicleKey = profile.vehicleCategoryKey || "";
-  const isParcelVehicle = ["parcel", "cargo", "truck", "tempo", "pickup"].some((t) =>
-    driverVehicleKey.includes(t),
-  );
+  const isParcelVehicle = isParcelOnlyVehicle(profile.vehicleCategoryKey, profile.categoryServiceType);
   if (!requirements.requiresParcel && isParcelVehicle) {
     return { eligible: false, reason: "parcel_vehicle_on_ride_trip" };
   }
@@ -497,8 +499,7 @@ export async function isDriverEligibleForDispatch(
   if (requirements.strictCategoryIds?.length && !requirements.strictCategoryIds.includes(profile.vehicleCategoryId || "")) {
     return { eligible: false, reason: "vehicle_category_mismatch", profile };
   }
-  const driverVehicleKey = profile.vehicleCategoryKey || "";
-  const isParcelVehicle = ["parcel", "cargo", "truck", "tempo", "pickup"].some((token) => driverVehicleKey.includes(token));
+  const isParcelVehicle = isParcelOnlyVehicle(profile.vehicleCategoryKey, profile.categoryServiceType);
   if (!requirements.requiresParcel && isParcelVehicle) {
     return { eligible: false, reason: "parcel_vehicle_on_ride_trip", profile };
   }

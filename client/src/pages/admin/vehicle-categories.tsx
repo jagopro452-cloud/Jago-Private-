@@ -5,19 +5,36 @@ import { useToast } from "@/hooks/use-toast";
 import { ImageUploader } from "@/components/image-uploader";
 import { adminConfirm } from "./components/AdminPrimitives";
 
-const VEHICLE_TYPES = [
+// Ride and Parcel keep entirely separate vehicle_type vocabularies —
+// deliberately no shared value (e.g. "auto") between the two lists. Picking
+// a Ride-flavored slug for a Parcel category (or vice versa) is exactly how
+// a Parcel Auto/3-Wheeler category previously ended up saved with
+// vehicle_type='auto', the same slug as Ride Auto — which routed Parcel
+// Auto bookings to every Ride Auto driver. Scoping the dropdown by the
+// selected Service Type below prevents that mistake at entry time.
+const RIDE_VEHICLE_TYPES = [
   { value: "bike", label: "Bike" },
   { value: "auto", label: "Auto" },
   { value: "mini_car", label: "Mini Car" },
   { value: "sedan", label: "Sedan" },
   { value: "suv", label: "SUV" },
+];
+const PARCEL_VEHICLE_TYPES = [
   { value: "bike_parcel", label: "Bike Parcel" },
   { value: "auto_parcel", label: "Auto Parcel" },
   { value: "tata_ace", label: "Tata Ace" },
   { value: "bolero_pickup", label: "Bolero Pickup" },
   { value: "tempo_407", label: "Tempo 407" },
-  { value: "carpool", label: "Carpool" },
 ];
+const OTHER_VEHICLE_TYPES = [{ value: "carpool", label: "Carpool" }];
+const VEHICLE_TYPES = [...RIDE_VEHICLE_TYPES, ...PARCEL_VEHICLE_TYPES, ...OTHER_VEHICLE_TYPES];
+
+function vehicleTypeOptionsForService(serviceType: string) {
+  if (serviceType === "ride") return RIDE_VEHICLE_TYPES;
+  if (serviceType === "parcel" || serviceType === "cargo") return PARCEL_VEHICLE_TYPES;
+  if (serviceType === "pool") return OTHER_VEHICLE_TYPES;
+  return VEHICLE_TYPES;
+}
 
 const SERVICE_TYPES = [
   { value: "ride", label: "Ride" },
@@ -70,12 +87,29 @@ function VehicleModal({ open, onClose, editing, form, setForm, onSave, saving }:
             <div className="col-4">
               <label className="form-label-jago">Vehicle Type</label>
               <select className="form-select" value={form.vehicleType} onChange={e => f("vehicleType", e.target.value)}>
-                {VEHICLE_TYPES.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
+                {vehicleTypeOptionsForService(form.serviceType).map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
               </select>
             </div>
             <div className="col-4">
               <label className="form-label-jago">Service Type</label>
-              <select className="form-select" value={form.serviceType} onChange={e => f("serviceType", e.target.value)}>
+              <select
+                className="form-select"
+                value={form.serviceType}
+                onChange={e => {
+                  const nextServiceType = e.target.value;
+                  const validOptions = vehicleTypeOptionsForService(nextServiceType);
+                  setForm((prev: any) => ({
+                    ...prev,
+                    serviceType: nextServiceType,
+                    // Re-scope vehicleType too — a slug valid for the old
+                    // Service Type is very likely invalid for the new one
+                    // (Ride's "auto" vs. Parcel's "auto_parcel", etc.).
+                    vehicleType: validOptions.some(v => v.value === prev.vehicleType)
+                      ? prev.vehicleType
+                      : (validOptions[0]?.value ?? prev.vehicleType),
+                  }));
+                }}
+              >
                 {SERVICE_TYPES.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
               </select>
             </div>

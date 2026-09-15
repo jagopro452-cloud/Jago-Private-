@@ -80,8 +80,8 @@ android {
         applicationId "com.mindwhile.jago_pilot"
         minSdkVersion 24
         targetSdkVersion 35
-        versionCode 105
-        versionName "1.0.105"
+        versionCode 106
+        versionName "1.0.106"
         multiDexEnabled true
         manifestPlaceholders = [googleMapsApiKey: mapsApiKey]
     }

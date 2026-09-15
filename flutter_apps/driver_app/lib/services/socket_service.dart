@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import '../config/api_config.dart';
 import 'auth_service.dart';
+import 'driver_eligibility.dart';
 import 'error_reporting.dart';
 
 class SocketService {
@@ -185,8 +186,15 @@ class SocketService {
       _connectedController.add(false);
     });
 
-    _on('trip:new_request', (data) {
-      _newTripController.add(Map<String, dynamic>.from(data));
+    _on('trip:new_request', (data) async {
+      final map = Map<String, dynamic>.from(data);
+      // Client-side safety net (see driver_eligibility.dart) on top of
+      // server-side dispatch filtering.
+      if (!await DriverEligibility.canReceive(map['serviceType'] as String?)) {
+        debugPrint('[SOCKET] dropped trip:new_request — serviceType=${map['serviceType']} not eligible for this driver');
+        return;
+      }
+      _newTripController.add(map);
     });
 
     _on('trip:cancelled', (data) {
@@ -238,8 +246,15 @@ class SocketService {
     });
 
     // Parcel delivery request
-    _on('parcel:new_request', (data) {
-      _newParcelController.add(Map<String, dynamic>.from(data));
+    _on('parcel:new_request', (data) async {
+      final map = Map<String, dynamic>.from(data);
+      // Client-side safety net (see driver_eligibility.dart) on top of
+      // server-side dispatch filtering.
+      if (!await DriverEligibility.canReceive(map['serviceType'] as String?)) {
+        debugPrint('[SOCKET] dropped parcel:new_request — serviceType=${map['serviceType']} not eligible for this driver');
+        return;
+      }
+      _newParcelController.add(map);
     });
 
     // Wallet recharged (after Razorpay payment verified)

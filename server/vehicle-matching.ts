@@ -106,6 +106,27 @@ export function normalizeBookingVehicleType(value: string | null | undefined): s
   return key;
 }
 
+/**
+ * True when a driver's own registered vehicle category is fundamentally a
+ * Parcel-only vehicle (Bike Delivery, Auto Parcel, Tata Ace, Bolero Pickup,
+ * Tempo 407, Pickup/Mini Truck) — i.e. this vehicle can never carry normal
+ * Ride passengers. Centralized here so ride dispatch (dispatch-eligibility.ts)
+ * and parcel dispatch (parcel-advanced.ts) classify a driver's own vehicle
+ * the same way instead of each maintaining its own substring heuristic.
+ *
+ * NOTE: this answers "is the vehicle a parcel-only vehicle", not "is this
+ * driver eligible for parcel bookings" — a normal Ride Bike is NOT a
+ * parcel-only vehicle (it must still receive Ride alerts) even though it
+ * also qualifies for Parcel alerts via the Ride-Bike exception in
+ * server/service-eligibility.ts.
+ */
+export function isParcelOnlyVehicle(vehicleCategoryKey: string | null | undefined, categoryServiceType?: string | null): boolean {
+  const svc = normalizeVehicleKey(categoryServiceType || "");
+  if (svc === "parcel" || svc === "cargo") return true;
+  const key = normalizeVehicleKey(vehicleCategoryKey || "");
+  return ["parcel", "truck", "tempo", "pickup"].some((token) => key.includes(token));
+}
+
 export function getDriverSocketRoomKey(meta: VehicleCategoryMeta | null): string | null {
   if (!meta) return null;
   return normalizeBookingVehicleType(meta.vehicleType || meta.name || meta.type);
